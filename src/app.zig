@@ -149,11 +149,11 @@ pub const AppState = struct {
         const idx = @min(self.selected, self.shelf.entries.items.len - 1);
         const active = self.shelf.entries.items[idx];
         self.editor.syncDocument(idx, active);
-        const live_doc = self.editor.activeDoc(active.doc);
-        const live_raw = self.editor.activeRaw(active.raw);
 
         switch (self.view_mode) {
             .rendered => {
+                const live_doc = self.editor.activeDoc(active.doc);
+                const live_raw = self.editor.activeRaw(active.raw);
                 const content_width: f32 = @min(@max(pane_w - 48, 200), 700);
                 ui.scroll(c, .{ .width = .fill, .grow = 1 });
                 render.renderDocument(
@@ -180,6 +180,8 @@ pub const AppState = struct {
                 const content_width: f32 = @min(@max(prev_w - 36, 180), 680);
                 ui.row(c, .{ .width = .fill, .grow = 1 });
                 self.editor.renderEditorPane(c, pal, &self.shelf, idx, ed_w, &self.status_toast);
+                const live_doc = self.editor.activeDoc(active.doc);
+                const live_raw = self.editor.activeRaw(active.raw);
                 ui.column(c, .{ .width = .{ .px = prev_w }, .height = .fill });
                 ui.scroll(c, .{ .width = .fill, .grow = 1 });
                 render.renderDocument(

@@ -42,8 +42,10 @@ pub const EditorState = struct {
     loaded_name_buf: [128]u8 = undefined,
     loaded_name_len: usize = 0,
     dirty: bool = false,
-    live_arena: ?std.heap.ArenaAllocator = null,
+    live_arenas: [4]?std.heap.ArenaAllocator = .{ null, null, null, null },
+    arena_slot: u2 = 0,
     live_doc: ?md.Document = null,
+    live_raw: ?[]const u8 = null,
     last_feedback_status: []const u8 = "",
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io) EditorState {
@@ -51,7 +53,9 @@ pub const EditorState = struct {
     }
 
     pub fn deinit(self: *EditorState) void {
-        if (self.live_arena) |*a| a.deinit();
+        for (&self.live_arenas) |*slot| {
+            if (slot.*) |*a| a.deinit();
+        }
         self.buf.deinit();
         self.reply_buf.deinit();
     }
@@ -68,11 +72,8 @@ pub const EditorState = struct {
         self.loaded_name_len = n;
         self.buf.set(entry.raw);
         self.dirty = false;
-        if (self.live_arena) |*a| {
-            a.deinit();
-            self.live_arena = null;
-        }
         self.live_doc = null;
+        self.live_raw = null;
     }
 
     pub fn forceReload(self: *EditorState, index: usize, entry: shelf_mod.Entry) void {
@@ -80,15 +81,21 @@ pub const EditorState = struct {
         self.syncDocument(index, entry);
     }
 
-    /// Re-parses the live buffer into a `md.Document` + Mermaid ASTs.
+    /// Re-parses the live buffer into a `md.Document` + Mermaid ASTs in the next
+    /// ring-buffer arena slot so previous passes' slices remain valid throughout
+    /// multi-pass `ui.frame.run` rebuilds.
     pub fn reparse(self: *EditorState, is_html: bool) void {
-        if (self.live_arena) |*a| {
+        self.arena_slot +%= 1;
+        const slot = &self.live_arenas[self.arena_slot];
+        if (slot.*) |*a| {
             _ = a.reset(.retain_capacity);
         } else {
-            self.live_arena = .init(self.gpa);
+            slot.* = .init(self.gpa);
         }
-        const a = self.live_arena.?.allocator();
-        self.live_doc = md.parse(a, self.buf.text(), is_html);
+        const a = slot.*.?.allocator();
+        const raw_copy = a.dupe(u8, self.buf.text()) catch return;
+        self.live_raw = raw_copy;
+        self.live_doc = md.parse(a, raw_copy, is_html);
     }
 
     pub fn activeDoc(self: *const EditorState, fallback: md.Document) md.Document {
@@ -96,7 +103,7 @@ pub const EditorState = struct {
     }
 
     pub fn activeRaw(self: *const EditorState, fallback: []const u8) []const u8 {
-        return if (self.dirty or self.buf.text().len > 0) self.buf.text() else fallback;
+        return self.live_raw orelse fallback;
     }
 
     /// Saves the edited buffer back to the file on disk (or `.nanoui/shelf/`).

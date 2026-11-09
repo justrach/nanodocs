@@ -177,6 +177,19 @@ test "nanodocs UI renders Mermaid diagrams offscreen in Tester and switches mode
     try t.clickText("+ Flowchart");
     try testing.expect(state.editor.dirty);
     try testing.expect(state.editor.live_doc != null);
+
+    // Focus the live Markdown editor and test typing + repeated Backspace (regression test for mid-frame arena UAF)
+    state.editor.buf.focus();
+    t.frame();
+    const len_before = state.editor.buf.text().len;
+    t.typeText("Hello live GPU");
+    try testing.expectEqual(len_before + 14, state.editor.buf.text().len);
+    for (0..6) |_| {
+        t.textOps(&.{.{ .command = .delete_backward }});
+        t.key(.backspace);
+    }
+    try testing.expect(state.editor.buf.text().len < len_before + 14);
+    try testing.expect(state.editor.live_doc != null);
 }
 
 test "MCP server: legacy initialize, stateless 2026-07-28 discover, tools/list and render_mermaid" {

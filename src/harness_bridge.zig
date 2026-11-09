@@ -366,9 +366,15 @@ pub const Bridge = struct {
         }
     }
 
+    pub fn ensureProbed(self: *Bridge, root_dir: []const u8) void {
+        if (!self.probed_once) self.refresh(root_dir);
+    }
+
     /// Renders the interactive Harness Bridge pills inside the bottom Agent Bridge bar.
     pub fn renderBridgePills(self: *Bridge, c: *ui.Context, is_dark: bool, root_dir: []const u8, mcp_port: u16) void {
-        if (!self.probed_once) self.refresh(root_dir);
+        if (self.targets.items.len == 0) {
+            self.populateFallbackAgents(self.arena.allocator(), ".");
+        }
 
         const text_muted = if (is_dark) ui.Color.hex(0x94a3b8) else ui.Color.hex(0x475569);
         const pill_bg = if (is_dark) ui.Color.hex(0x1e293b) else ui.Color.hex(0xe2e8f0);

@@ -27,8 +27,8 @@ pub const ViewMode = enum {
 
     pub fn label(self: ViewMode) []const u8 {
         return switch (self) {
-            .rendered => "Rendered",
-            .split => "Split Edit",
+            .rendered => "🔒 Read-Only",
+            .split => "✎ Split Edit",
             .source => "Source",
         };
     }
@@ -52,6 +52,7 @@ pub const EditorState = struct {
     last_feedback_msg_len: usize = 0,
     sent_count: usize = 0,
     emit_stdout: bool = false,
+    agent_waiting_cached: bool = false,
     harness: harness_bridge.Bridge,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io) EditorState {
@@ -67,7 +68,7 @@ pub const EditorState = struct {
         self.reply_buf.deinit();
     }
 
-    /// Synchronizes the editor buffer when the user switches documents.
+    /// Synchronizes the editor buffer when the user switches documents (only called when Edit mode is unlocked).
     pub fn syncDocument(self: *EditorState, index: usize, entry: shelf_mod.Entry) void {
         const name = entry.name;
         const prev_name = self.loaded_name_buf[0..self.loaded_name_len];
@@ -81,6 +82,7 @@ pub const EditorState = struct {
         self.dirty = false;
         self.live_doc = null;
         self.live_raw = null;
+        self.agent_waiting_cached = isAgentWaiting(self.io, ".");
     }
 
     pub fn forceReload(self: *EditorState, index: usize, entry: shelf_mod.Entry) void {
@@ -142,6 +144,7 @@ pub const EditorState = struct {
         selected: usize,
         width: f32,
         on_toast: *[]const u8,
+        view_mode: *ViewMode,
     ) void {
         c.theme = if (pal.sidebar.r < 0.5) ui.Theme.dark_theme else ui.Theme.light;
         const is_html = if (shelf.entries.items.len > 0)
@@ -185,6 +188,10 @@ pub const EditorState = struct {
             _ = self.buf.insert(self.buf.text().len, "\n> [!TIP]\n> Live note added in nanodocs editor.\n");
             self.dirty = true;
             self.reparse(is_html);
+            c.changed = true;
+        }
+        if (snippetBtn(c, pal, "btn-lock-ro", "🔒 Read-Only")) {
+            view_mode.* = .rendered;
             c.changed = true;
         }
 
@@ -268,7 +275,7 @@ pub const EditorState = struct {
         defer ui.end(c);
 
         // Live Agent Bridge + Harness status & receipt strip
-        const agent_waiting = isAgentWaiting(self.io, shelf.root_dir);
+        const agent_waiting = self.agent_waiting_cached;
         ui.row(c, .{ .width = .fill, .align_items = .center, .gap = 6 });
         ui.row(c, .{
             .padding = .{ .left = 7, .right = 7, .top = 2, .bottom = 2 },

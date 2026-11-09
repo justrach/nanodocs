@@ -181,14 +181,11 @@ fn renderBlock(
                 .align_items = if (p.centered) .center else .start,
             });
             defer ui.end(c);
-            ui.markdown.view(c, p.text, .{
+            ui.richText(c, p.rich.text, p.rich.spans, .{
                 .size = if (p.muted) 12.5 else 14.5,
                 .line_height = 22,
                 .color = if (p.muted) pal.muted else pal.ink,
                 .wrap = true,
-            }, .{
-                .code_background = pal.code_bg,
-                .code_color = pal.ink,
             });
         },
         .badges => |badges| {
@@ -226,7 +223,7 @@ fn renderBlock(
         },
         .code => |code| renderCodeBlock(c, code.lang, code.text, pal, idx),
         .mermaid => |m| renderMermaidBlock(c, m.source, m.diagram, pal, idx, content_width),
-        .callout => |ca| renderCallout(c, ca.kind, ca.title, ca.text, pal),
+        .callout => |ca| renderCallout(c, ca.kind, ca.title, ca.rich, pal),
         .list_item => |li| {
             ui.row(c, .{
                 .width = .fill,
@@ -248,14 +245,11 @@ fn renderBlock(
             });
             ui.column(c, .{ .grow = 1 });
             defer ui.end(c);
-            ui.markdown.view(c, li.text, .{
+            ui.richText(c, li.rich.text, li.rich.spans, .{
                 .size = 14.5,
                 .line_height = 21,
                 .color = pal.ink,
                 .wrap = true,
-            }, .{
-                .code_background = pal.code_bg,
-                .code_color = pal.ink,
             });
         },
         .table => |tbl| renderTable(c, tbl.headers, tbl.rows, pal),
@@ -424,7 +418,7 @@ fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("merm
     }
 }
 
-fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: []const u8, pal: Palette) void {
+fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: ui.markdown.Rich, pal: Palette) void {
     const accent: ui.Color = switch (kind) {
         .blockquote => pal.muted,
         .note => .hex(0x2563eb),
@@ -448,12 +442,12 @@ fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: []
     if (title.len > 0) {
         ui.text(c, title, .{ .size = 12.5, .weight = .bold, .color = accent });
     }
-    ui.markdown.view(c, body, .{
+    ui.richText(c, body.text, body.spans, .{
         .size = 13.5,
         .line_height = 20,
         .color = pal.ink,
         .wrap = true,
-    }, .{ .code_background = pal.code_bg, .code_color = pal.ink });
+    });
 }
 
 fn colGrow(col_idx: usize, num_cols: usize) f32 {
@@ -504,7 +498,7 @@ fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []cons
         });
         for (r, 0..) |cell, ci| {
             ui.column(c, .{ .width = .fill, .grow = colGrow(ci, r.len) });
-            ui.markdown.view(c, cell.text, .{ .size = 12.5, .color = pal.ink, .wrap = true }, .{ .code_background = pal.code_bg });
+            ui.richText(c, cell.rich.text, cell.rich.spans, .{ .size = 12.5, .color = pal.ink, .wrap = true });
             ui.end(c);
         }
         ui.end(c);

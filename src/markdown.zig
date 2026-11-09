@@ -18,6 +18,7 @@ pub const Badge = struct {
 
 pub const Cell = struct {
     text: []const u8,
+    rich: ui.markdown.Rich = .{ .text = "", .spans = &.{} },
     image_src: []const u8 = "",
 };
 
@@ -29,17 +30,21 @@ pub const HeadingEntry = struct {
 
 pub const Block = union(enum) {
     heading: struct { level: u8, text: []const u8, centered: bool = false },
-    paragraph: struct { text: []const u8, centered: bool = false, muted: bool = false },
+    paragraph: struct { text: []const u8, rich: ui.markdown.Rich, centered: bool = false, muted: bool = false },
     code: struct { lang: []const u8, text: []const u8 },
     mermaid: struct { source: []const u8, diagram: mm.Diagram },
-    callout: struct { kind: AlertKind, title: []const u8, text: []const u8 },
-    list_item: struct { depth: u8, ordered: u16, checked: ?bool, text: []const u8 },
+    callout: struct { kind: AlertKind, title: []const u8, text: []const u8, rich: ui.markdown.Rich },
+    list_item: struct { depth: u8, ordered: u16, checked: ?bool, text: []const u8, rich: ui.markdown.Rich },
     image: struct { src: []const u8, alt: []const u8, width: f32, centered: bool },
     badges: []const Badge,
     table: struct { headers: []const []const u8, rows: []const []const Cell },
     details: struct { summary: []const u8, body: []const Block },
     rule,
 };
+
+pub fn parseRich(a: std.mem.Allocator, text: []const u8) ui.markdown.Rich {
+    return ui.markdown.parse(a, text, .{}) catch .{ .text = text, .spans = &.{} };
+}
 
 pub const Document = struct {
     title: []const u8,
@@ -209,7 +214,8 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
                 if (qbody.items.len > 0) qbody.append(a, ' ') catch {};
                 qbody.appendSlice(a, rest) catch {};
             }
-            out.append(a, .{ .callout = .{ .kind = kind, .title = title, .text = cleanHtmlInline(a, qbody.items) } }) catch {};
+            const ctext = cleanHtmlInline(a, qbody.items);
+            out.append(a, .{ .callout = .{ .kind = kind, .title = title, .text = ctext, .rich = parseRich(a, ctext) } }) catch {};
             continue;
         }
 
@@ -225,7 +231,7 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
                 if (isSeparatorRow(pt)) continue;
                 const cols = splitTableRow(a, pt);
                 var cells: std.ArrayList(Cell) = .empty;
-                for (cols) |c_txt| cells.append(a, .{ .text = c_txt }) catch {};
+                for (cols) |c_txt| cells.append(a, .{ .text = c_txt, .rich = parseRich(a, c_txt) }) catch {};
                 rows.append(a, cells.items) catch {};
             }
             out.append(a, .{ .table = .{ .headers = headers.items, .rows = rows.items } }) catch {};
@@ -233,7 +239,8 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
         }
 
         if (parseListMarker(line)) |lm| {
-            out.append(a, .{ .list_item = .{ .depth = lm.depth, .ordered = lm.ordered, .checked = lm.checked, .text = cleanHtmlInline(a, lm.rest) } }) catch {};
+            const ltext = cleanHtmlInline(a, lm.rest);
+            out.append(a, .{ .list_item = .{ .depth = lm.depth, .ordered = lm.ordered, .checked = lm.checked, .text = ltext, .rich = parseRich(a, ltext) } }) catch {};
             continue;
         }
 
@@ -249,7 +256,7 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
             para.appendSlice(a, cleanHtmlInline(a, pt)) catch {};
         }
         if (para.items.len > 0) {
-            out.append(a, .{ .paragraph = .{ .text = para.items } }) catch {};
+            out.append(a, .{ .paragraph = .{ .text = para.items, .rich = parseRich(a, para.items) } }) catch {};
         }
     }
     return out.items;
@@ -280,7 +287,7 @@ fn parseHtmlParagraph(a: std.mem.Allocator, out: *std.ArrayList(Block), html: []
     const muted = std.mem.indexOf(u8, html, "<sub") != null;
     const txt = std.mem.trim(u8, cleanHtmlInline(a, html), " \t\r\n");
     if (txt.len > 0) {
-        out.append(a, .{ .paragraph = .{ .text = txt, .centered = centered, .muted = muted } }) catch {};
+        out.append(a, .{ .paragraph = .{ .text = txt, .rich = parseRich(a, txt), .centered = centered, .muted = muted } }) catch {};
     }
 }
 

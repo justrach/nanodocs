@@ -88,14 +88,14 @@ pub const AppState = struct {
         if (c.shortcut(.{ .key = 'e', .cmd = true })) self.view_mode = self.view_mode.next();
         if (c.shortcut(.{ .key = 'd', .cmd = true })) self.show_env_panel = !self.show_env_panel;
         if (c.shortcut(.{ .key = 'm', .cmd = true })) self.show_mcp_panel = !self.show_mcp_panel;
-        if (c.shortcut(.{ .key = 's', .cmd = true })) {
+        if (c.shortcut(.{ .key = 's', .cmd = true }) and self.view_mode == .split) {
             if (self.editor.saveCurrent(&self.shelf, self.selected)) |_| {
                 self.status_toast = "✓ Saved edits";
             }
         }
         if (c.shortcut(.{ .key = 'r', .cmd = true }) and !c.live_resizing) {
             self.shelf.reload(self.explicit_file);
-            if (self.shelf.entries.items.len > 0) {
+            if (self.shelf.entries.items.len > 0 and self.view_mode == .split) {
                 const idx = @min(self.selected, self.shelf.entries.items.len - 1);
                 self.editor.forceReload(idx, self.shelf.entries.items[idx]);
             }
@@ -148,10 +148,9 @@ pub const AppState = struct {
 
         const idx = @min(self.selected, self.shelf.entries.items.len - 1);
         const active = self.shelf.entries.items[idx];
-        self.editor.syncDocument(idx, active);
 
         switch (self.view_mode) {
-            .rendered => {
+            .rendered, .source => {
                 const live_doc = self.editor.activeDoc(active.doc);
                 const live_raw = self.editor.activeRaw(active.raw);
                 const content_width: f32 = @min(@max(pane_w - 48, 200), 700);
@@ -160,7 +159,7 @@ pub const AppState = struct {
                     c,
                     live_doc,
                     live_raw,
-                    false,
+                    self.view_mode == .source,
                     pal,
                     &self.images,
                     self.gpa,
@@ -171,15 +170,14 @@ pub const AppState = struct {
                 );
                 ui.end(c);
             },
-            .source => {
-                self.editor.renderEditorPane(c, pal, &self.shelf, idx, pane_w, &self.status_toast);
-            },
             .split => {
+                self.editor.syncDocument(idx, active);
+                self.editor.harness.ensureProbed(self.shelf.root_dir);
                 const ed_w = @floor(pane_w * 0.45);
                 const prev_w = @max(pane_w - ed_w, 200);
                 const content_width: f32 = @min(@max(prev_w - 36, 180), 680);
                 ui.row(c, .{ .width = .fill, .grow = 1 });
-                self.editor.renderEditorPane(c, pal, &self.shelf, idx, ed_w, &self.status_toast);
+                self.editor.renderEditorPane(c, pal, &self.shelf, idx, ed_w, &self.status_toast, &self.view_mode);
                 const live_doc = self.editor.activeDoc(active.doc);
                 const live_raw = self.editor.activeRaw(active.raw);
                 ui.column(c, .{ .width = .{ .px = prev_w }, .height = .fill });
@@ -200,10 +198,9 @@ pub const AppState = struct {
                 ui.end(c);
                 ui.end(c);
                 ui.end(c);
+                self.editor.renderAgentCommsBar(c, pal, &self.shelf, idx, pane_w, &self.status_toast);
             },
         }
-
-        self.editor.renderAgentCommsBar(c, pal, &self.shelf, idx, pane_w, &self.status_toast);
     }
 
     fn renderSidebar(self: *AppState, c: *ui.Context, pal: render.Palette, sidebar_w: f32) void {

@@ -235,6 +235,22 @@ pub const Server = struct {
             return writeToolResult(a, out, id, is_modern, msg, false);
         }
 
+        if (std.mem.eql(u8, name, "wait_for_feedback")) {
+            const timeout_ms: u64 = if (args == .object) blk: {
+                if (args.object.get("timeout_ms")) |v| {
+                    if (v == .integer and v.integer > 0) break :blk @intCast(v.integer);
+                }
+                break :blk 120_000;
+            } else 120_000;
+            if (self.on_show) |cb| cb(self.on_show_ctx, "");
+            const reply = editor_mod.waitForNextInboxEntry(a, self.io, ".", timeout_ms);
+            if (self.on_show) |cb| cb(self.on_show_ctx, "");
+            if (reply.len == 0) {
+                return writeToolResult(a, out, id, is_modern, "{\"timeout\":true,\"message\":\"No new human feedback received before timeout.\"}", false);
+            }
+            return writeToolResult(a, out, id, is_modern, reply, false);
+        }
+
         if (std.mem.eql(u8, name, "post_feedback")) {
             const doc_name = string(args, "doc") orelse "untitled.md";
             const status = string(args, "status") orelse "comment";
@@ -312,6 +328,7 @@ pub fn writeToolsList(w: *Io.Writer) !void {
         \\{"name":"list_shelf","title":"List Agent Shelf Documents","description":"Lists all Markdown and HTML artifacts in .nanoui/shelf/ and workspace documents.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true}},
         \\{"name":"read_document","title":"Read Document from Shelf","description":"Reads the source of a document in .nanoui/shelf/ or the workspace by name or path (including live user edits saved in nanodocs).","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Document filename or path"}},"required":["name"]},"annotations":{"readOnlyHint":true}},
         \\{"name":"read_feedback","title":"Read Human Feedback & Approvals","description":"Reads all human replies, approvals (approved / changes_requested / comment), and edit flags from .nanoui/shelf/inbox.jsonl.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true}},
+        \\{"name":"wait_for_feedback","title":"Wait for Human Reply or Approval in nanodocs","description":"Lights up the `AGENT WAITING FOR REPLY` indicator in nanodocs and blocks until the human clicks `Send ↵`, `✎ Request Changes`, or `✓ Approve Plan` in the nanodocs GUI window, returning their exact JSONL reply and edit status.","inputSchema":{"type":"object","properties":{"timeout_ms":{"type":"integer","description":"Maximum time to wait in milliseconds (default 120000)"}}},"annotations":{"readOnlyHint":true}},
         \\{"name":"post_feedback","title":"Post Feedback Entry to Inbox","description":"Appends a structured feedback or question entry to .nanoui/shelf/inbox.jsonl.","inputSchema":{"type":"object","properties":{"doc":{"type":"string","description":"Target document filename"},"status":{"type":"string","description":"approved, changes_requested, or comment"},"message":{"type":"string","description":"Feedback or question text"}},"required":["message"]},"annotations":{"readOnlyHint":false}}
         \\]}
     );

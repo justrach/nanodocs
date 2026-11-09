@@ -78,6 +78,7 @@ pub fn main(init: std.process.Init) !void {
     var is_mcp_cmd: bool = false;
     var is_mcp_config: bool = false;
     var is_inbox_cmd: bool = false;
+    var is_wait_cmd: bool = false;
     var is_reply_cmd: bool = false;
     var mcp_use_http: bool = false;
     var no_mcp_bg: bool = false;
@@ -164,6 +165,10 @@ pub fn main(init: std.process.Init) !void {
             is_inbox_cmd = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "wait") or std.mem.eql(u8, arg, "--wait")) {
+            is_wait_cmd = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "reply")) {
             is_reply_cmd = true;
             continue;
@@ -215,6 +220,16 @@ pub fn main(init: std.process.Init) !void {
         const inbox = editor_mod.readInboxAlloc(init.gpa, init.io, ".");
         defer init.gpa.free(inbox);
         _ = std.Io.File.stdout().writeStreamingAll(init.io, inbox) catch {};
+        return;
+    }
+
+    if (is_wait_cmd) {
+        const reply = editor_mod.waitForNextInboxEntry(init.gpa, init.io, ".", 300_000);
+        defer init.gpa.free(reply);
+        if (reply.len > 0) {
+            _ = std.Io.File.stdout().writeStreamingAll(init.io, reply) catch {};
+            _ = std.Io.File.stdout().writeStreamingAll(init.io, "\n") catch {};
+        }
         return;
     }
 
@@ -305,6 +320,7 @@ pub fn main(init: std.process.Init) !void {
 
     var state = AppState.init(init.gpa, init.io, explicit_file);
     defer state.deinit();
+    state.editor.emit_stdout = !has_snapshot_flag;
     if (dark_start) state.mode = .dark;
     if (split_start) state.view_mode = .split;
 

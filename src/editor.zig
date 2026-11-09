@@ -47,6 +47,10 @@ pub const EditorState = struct {
     live_doc: ?md.Document = null,
     live_raw: ?[]const u8 = null,
     last_feedback_status: []const u8 = "",
+    last_feedback_msg_buf: [160]u8 = undefined,
+    last_feedback_msg_len: usize = 0,
+    sent_count: usize = 0,
+    emit_stdout: bool = false,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io) EditorState {
         return .{ .gpa = gpa, .io = io };
@@ -237,7 +241,7 @@ pub const EditorState = struct {
         }
     }
 
-    /// Renders the bottom Human → Agent feedback & annotation bar.
+    /// Renders the bottom Human → Agent feedback & annotation bar + live receipt strip.
     pub fn renderAgentCommsBar(
         self: *EditorState,
         c: *ui.Context,
@@ -248,15 +252,66 @@ pub const EditorState = struct {
         on_toast: *[]const u8,
     ) void {
         const compact = pane_w < 760;
-        ui.row(c, .{
+        ui.column(c, .{
             .width = .fill,
-            .padding = .{ .top = 8, .bottom = 10, .left = if (compact) 12 else 20, .right = if (compact) 12 else 20 },
-            .align_items = .center,
-            .gap = 8,
+            .padding = .{ .top = 6, .bottom = 9, .left = if (compact) 12 else 20, .right = if (compact) 12 else 20 },
+            .gap = 6,
             .background = pal.sidebar,
             .border = pal.border,
             .border_width = 1,
         });
+        defer ui.end(c);
+
+        // Live Agent Bridge status & receipt strip
+        const agent_waiting = isAgentWaiting(self.io, shelf.root_dir);
+        ui.row(c, .{ .width = .fill, .align_items = .center, .gap = 8 });
+        ui.row(c, .{
+            .padding = .{ .left = 7, .right = 7, .top = 2, .bottom = 2 },
+            .radius = 999,
+            .background = if (agent_waiting) .hex(0x7c3aed) else pal.code_bg,
+        });
+        ui.text(c, if (agent_waiting) "⚡ AGENT WAITING FOR REPLY" else "● AGENT BRIDGE READY", .{
+            .size = 9.5,
+            .weight = .bold,
+            .color = if (agent_waiting) .hex(0xffffff) else .hex(0x16a34a),
+        });
+        ui.end(c);
+
+        if (self.last_feedback_msg_len > 0) {
+            const last_msg = self.last_feedback_msg_buf[0..self.last_feedback_msg_len];
+            ui.text(c, c.print("Last sent (#{d} · {s}): \"{s}\"", .{ self.sent_count, self.last_feedback_status, last_msg }), .{
+                .size = 11,
+                .color = pal.ink,
+                .truncate = .ellipsis,
+            });
+        } else {
+            ui.text(c, "Replies stream to stdout, HTTP MCP (`wait_for_feedback` / `read_feedback`), and `.nanoui/shelf/inbox.jsonl`", .{
+                .size = 11,
+                .color = pal.muted,
+                .truncate = .ellipsis,
+            });
+        }
+        ui.spacer(c);
+        if (self.last_feedback_msg_len > 0 and !compact) {
+            ui.key(c, "btn-copy-last-reply");
+            const cp_last = ui.pressable(c, .{
+                .padding = .{ .left = 7, .right = 7, .top = 2, .bottom = 2 },
+                .radius = 5,
+                .background = pal.code_bg,
+            }, pal.border);
+            ui.text(c, "Copy Reply", .{ .size = 10.5, .weight = .medium, .color = pal.ink });
+            ui.end(c);
+            if (cp_last.clicked) {
+                const last_msg = self.last_feedback_msg_buf[0..self.last_feedback_msg_len];
+                c.clipboard.write(c.clipboard.ctx, last_msg);
+                on_toast.* = "✓ Copied reply";
+                c.changed = true;
+            }
+        }
+        ui.end(c);
+
+        // Input & action buttons row
+        ui.row(c, .{ .width = .fill, .align_items = .center, .gap = 8 });
         defer ui.end(c);
 
         const doc_name = if (shelf.entries.items.len > 0)
@@ -270,7 +325,7 @@ pub const EditorState = struct {
             .width = .{ .px = field_w },
             .size = 12.5,
             .color = pal.ink,
-            .placeholder = if (compact) "Reply or annotate for Agent…" else "Reply to Agent or annotate this doc (saved to .nanoui/shelf/inbox.jsonl)…",
+            .placeholder = if (compact) "Reply or annotate for Agent…" else "Type feedback for Agent and press Enter ↵ (or click Revise / Approve)…",
         });
 
         ui.key(c, "btn-agent-send");
@@ -310,6 +365,7 @@ pub const EditorState = struct {
             null;
 
         if (submit_status) |st| {
+            const was_dirty = self.dirty;
             if (self.dirty) _ = self.saveCurrent(shelf, selected);
             const msg = if (self.reply_buf.text().len > 0)
                 self.reply_buf.text()
@@ -317,7 +373,11 @@ pub const EditorState = struct {
                 "Approved in nanodocs."
             else
                 "Changes requested in nanodocs.";
-            appendInbox(self.gpa, self.io, shelf.root_dir, doc_name, st, msg, self.dirty);
+            const n = @min(msg.len, self.last_feedback_msg_buf.len);
+            @memcpy(self.last_feedback_msg_buf[0..n], msg[0..n]);
+            self.last_feedback_msg_len = n;
+            self.sent_count += 1;
+            appendInboxEx(self.gpa, self.io, shelf.root_dir, doc_name, st, msg, was_dirty, self.emit_stdout);
             self.reply_buf.clear();
             self.last_feedback_status = st;
             on_toast.* = if (std.mem.eql(u8, st, "approved")) "✓ Sent Approval" else "✓ Sent to Agent Inbox";
@@ -338,7 +398,6 @@ fn snippetBtn(c: *ui.Context, pal: render.Palette, key_id: []const u8, label_str
     return b.clicked;
 }
 
-/// Appends one JSONL feedback event to `.nanoui/shelf/inbox.jsonl`.
 pub fn appendInbox(
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -347,6 +406,20 @@ pub fn appendInbox(
     status: []const u8,
     message: []const u8,
     edited: bool,
+) void {
+    appendInboxEx(gpa, io, root_dir, doc_name, status, message, edited, false);
+}
+
+/// Appends one JSONL feedback event to `.nanoui/shelf/inbox.jsonl` and optionally streams it to stdout.
+pub fn appendInboxEx(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    root_dir: []const u8,
+    doc_name: []const u8,
+    status: []const u8,
+    message: []const u8,
+    edited: bool,
+    emit_stdout: bool,
 ) void {
     const cwd = std.Io.Dir.cwd();
     const dir_path = if (std.mem.eql(u8, root_dir, "."))
@@ -362,25 +435,75 @@ pub fn appendInbox(
     const existing = cwd.readFileAlloc(io, inbox_path, gpa, .limited(2 << 20)) catch gpa.dupe(u8, "") catch return;
     defer gpa.free(existing);
 
+    var line_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer line_aw.deinit();
+    line_aw.writer.writeAll("{\"doc\":") catch return;
+    writeJsonStr(&line_aw.writer, doc_name) catch return;
+    line_aw.writer.writeAll(",\"status\":") catch return;
+    writeJsonStr(&line_aw.writer, status) catch return;
+    line_aw.writer.writeAll(",\"edited\":") catch return;
+    line_aw.writer.writeAll(if (edited) "true" else "false") catch return;
+    line_aw.writer.writeAll(",\"message\":") catch return;
+    writeJsonStr(&line_aw.writer, message) catch return;
+    line_aw.writer.writeAll("}\n") catch return;
+
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
     if (existing.len > 0) {
         aw.writer.writeAll(existing) catch return;
         if (existing[existing.len - 1] != '\n') aw.writer.writeByte('\n') catch return;
     }
-    aw.writer.writeAll("{\"doc\":") catch return;
-    writeJsonStr(&aw.writer, doc_name) catch return;
-    aw.writer.writeAll(",\"status\":") catch return;
-    writeJsonStr(&aw.writer, status) catch return;
-    aw.writer.writeAll(",\"edited\":") catch return;
-    aw.writer.writeAll(if (edited) "true" else "false") catch return;
-    aw.writer.writeAll(",\"message\":") catch return;
-    writeJsonStr(&aw.writer, message) catch return;
-    aw.writer.writeAll("}\n") catch return;
+    aw.writer.writeAll(line_aw.written()) catch return;
 
     const f = cwd.createFile(io, inbox_path, .{ .truncate = true }) catch return;
     defer f.close(io);
     f.writeStreamingAll(io, aw.written()) catch {};
+
+    if (emit_stdout) {
+        _ = std.Io.File.stdout().writeStreamingAll(io, line_aw.written()) catch {};
+    }
+}
+
+pub fn isAgentWaiting(io: std.Io, root_dir: []const u8) bool {
+    var buf: [256]u8 = undefined;
+    const p = if (std.mem.eql(u8, root_dir, "."))
+        ".nanoui/shelf/.agent_waiting"
+    else
+        (std.fmt.bufPrint(&buf, "{s}/.nanoui/shelf/.agent_waiting", .{root_dir}) catch return false);
+    if (std.Io.Dir.cwd().statFile(io, p, .{})) |_| return true else |_| return false;
+}
+
+/// Blocks until a new feedback line is appended to `.nanoui/shelf/inbox.jsonl` (or `timeout_ms` elapses).
+pub fn waitForNextInboxEntry(gpa: std.mem.Allocator, io: std.Io, root_dir: []const u8, timeout_ms: u64) []const u8 {
+    const cwd = std.Io.Dir.cwd();
+    const dir_path = if (std.mem.eql(u8, root_dir, "."))
+        gpa.dupe(u8, ".nanoui/shelf") catch return gpa.dupe(u8, "") catch ""
+    else
+        std.fmt.allocPrint(gpa, "{s}/.nanoui/shelf", .{root_dir}) catch return gpa.dupe(u8, "") catch "";
+    defer gpa.free(dir_path);
+    cwd.createDirPath(io, dir_path) catch {};
+
+    const wait_path = std.fmt.allocPrint(gpa, "{s}/.agent_waiting", .{dir_path}) catch return gpa.dupe(u8, "") catch "";
+    defer gpa.free(wait_path);
+    if (cwd.createFile(io, wait_path, .{ .truncate = true })) |wf| wf.close(io) else |_| {}
+    defer cwd.deleteFile(io, wait_path) catch {};
+
+    const initial = readInboxAlloc(gpa, io, root_dir);
+    defer gpa.free(initial);
+    const initial_len = initial.len;
+
+    var elapsed: u64 = 0;
+    const step_ms: u64 = 40;
+    while (elapsed < timeout_ms) : (elapsed += step_ms) {
+        io.sleep(.fromMilliseconds(@intCast(step_ms)), .awake) catch {};
+        const current = readInboxAlloc(gpa, io, root_dir);
+        if (current.len > initial_len) {
+            defer gpa.free(current);
+            return gpa.dupe(u8, std.mem.trim(u8, current[initial_len..], "\r\n")) catch (gpa.dupe(u8, "") catch "");
+        }
+        gpa.free(current);
+    }
+    return gpa.dupe(u8, "") catch "";
 }
 
 /// Reads `.nanoui/shelf/inbox.jsonl` (returns caller-owned slice).

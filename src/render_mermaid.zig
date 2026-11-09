@@ -33,28 +33,18 @@ pub fn draw(c: *ui.Context, d: mm.Diagram, room: f32, pal: render.Palette) bool 
     return true;
 }
 
-pub fn rect(c: *ui.Context, x: f32, y: f32, w: f32, h: f32, color: ui.Color, radius: f32) void {
-    _ = c.leaf(.{
-        .absolute = true,
-        .offset = .{ .x = x, .y = y },
-        .width = .{ .px = @max(w, 0) },
-        .height = .{ .px = @max(h, 0) },
-        .background = color,
-        .radius = radius,
-    }, .none, null);
+pub fn rect(cv: *ui.Canvas, x: f32, y: f32, w: f32, h: f32, color: ui.Color, radius: f32) void {
+    cv.rect(.{ .x = x, .y = y, .w = @max(w, 0), .h = @max(h, 0) }, color, radius);
 }
 
-pub fn panel(c: *ui.Context, x: f32, y: f32, w: f32, h: f32, fill: ui.Color, edge: ui.Color, radius: f32) void {
-    _ = c.leaf(.{
-        .absolute = true,
-        .offset = .{ .x = x, .y = y },
-        .width = .{ .px = w },
-        .height = .{ .px = h },
-        .background = fill,
-        .border = edge,
+pub fn panel(cv: *ui.Canvas, x: f32, y: f32, w: f32, h: f32, fill: ui.Color, edge: ui.Color, radius: f32) void {
+    cv.shapes.append(cv.c.alloc(), .{
+        .rect = .{ x, y, @max(w, 0), @max(h, 0) },
+        .color = .{ fill.r, fill.g, fill.b, fill.a },
+        .border_color = .{ edge.r, edge.g, edge.b, edge.a },
         .border_width = 1.25,
         .radius = radius,
-    }, .none, null);
+    }) catch {};
 }
 
 pub fn label(c: *ui.Context, x: f32, y: f32, w: f32, h: f32, text: []const u8, style: ui.TextStyle) void {
@@ -75,58 +65,26 @@ pub fn measure(c: *ui.Context, text: []const u8, style: ui.TextStyle) [2]f32 {
     return .{ @ceil(w), n * c.text.lineHeight(style) };
 }
 
-pub fn line(c: *ui.Context, x0: f32, y0: f32, x1: f32, y1: f32, kind: mm.Line, color: ui.Color) void {
+pub fn line(cv: *ui.Canvas, x0: f32, y0: f32, x1: f32, y1: f32, kind: mm.Line, color: ui.Color) void {
     if (kind == .invisible) return;
     const t: f32 = if (kind == .thick) 2.5 else 1.4;
-    const horizontal = @abs(y1 - y0) < 0.5;
-    const a = if (horizontal) @min(x0, x1) else @min(y0, y1);
-    const b = if (horizontal) @max(x0, x1) else @max(y0, y1);
-    if (kind != .dotted) {
-        if (horizontal) rect(c, a, y0 - t / 2, b - a, t, color, 0) else rect(c, x0 - t / 2, a, t, b - a + t / 2, color, 0);
-        return;
-    }
-    var p = a;
-    while (p < b) : (p += 10) {
-        const len = @min(5, b - p);
-        if (horizontal) rect(c, p, y0 - t / 2, len, t, color, 0) else rect(c, x0 - t / 2, p, t, len, color, 0);
-    }
+    cv.line(.{ .x = x0, .y = y0 }, .{ .x = x1, .y = y1 }, .{
+        .width = t,
+        .color = color,
+        .dash = if (kind == .dotted) .{ 5, 5 } else null,
+    });
 }
 
-pub fn arrow(c: *ui.Context, x: f32, y: f32, dir: mm.Dir, color: ui.Color) void {
+pub fn arrow(cv: *ui.Canvas, x: f32, y: f32, dir: mm.Dir, color: ui.Color) void {
     const len: f32 = 8;
     const half: f32 = 4.5;
-    var k: f32 = 0;
-    while (k < len) : (k += 1) {
-        const w = 2 * half * (k + 1) / len;
-        switch (dir) {
-            .down => rect(c, x - w / 2, y - k - 1, w, 1.2, color, 0),
-            .up => rect(c, x - w / 2, y + k, w, 1.2, color, 0),
-            .right => rect(c, x - k - 1, y - w / 2, 1.2, w, color, 0),
-            .left => rect(c, x + k, y - w / 2, 1.2, w, color, 0),
-        }
-    }
-}
-
-fn strips(c: *ui.Context, x: f32, y: f32, w: f32, h: f32, fill: ui.Color, edge: ui.Color, comptime half: fn (f32) f32) void {
-    const step: f32 = 1.5;
-    var row: f32 = 0;
-    while (row < h) : (row += step) {
-        const hw = half((row + step / 2) / h) * w / 2;
-        rect(c, x + w / 2 - hw - 0.75, y + row, 2 * hw + 1.5, step, edge, 0);
-    }
-    row = 1.5;
-    while (row < h - 1.5) : (row += step) {
-        const hw = half((row + step / 2) / h) * w / 2 - 1.75;
-        if (hw > 0) rect(c, x + w / 2 - hw, y + row, 2 * hw, step, fill, 0);
-    }
-}
-
-fn diamondHalf(t: f32) f32 {
-    return 1 - @abs(2 * t - 1);
-}
-
-fn hexagonHalf(t: f32) f32 {
-    return @min(1, 0.72 + 0.28 * (1 - @abs(2 * t - 1)) / 0.5);
+    const pts: [3]ui.Point = switch (dir) {
+        .down => .{ .{ .x = x, .y = y }, .{ .x = x - half, .y = y - len }, .{ .x = x + half, .y = y - len } },
+        .up => .{ .{ .x = x, .y = y }, .{ .x = x + half, .y = y + len }, .{ .x = x - half, .y = y + len } },
+        .right => .{ .{ .x = x, .y = y }, .{ .x = x - len, .y = y + half }, .{ .x = x - len, .y = y - half } },
+        .left => .{ .{ .x = x, .y = y }, .{ .x = x + len, .y = y - half }, .{ .x = x + len, .y = y + half } },
+    };
+    cv.triangle(pts[0], pts[1], pts[2], color, 7);
 }
 
 const Box = struct { x: f32 = 0, y: f32 = 0, w: f32, h: f32, rank: usize = 0, r0: f32 = 0, r1: f32 = 0, lab: f32 = 0 };
@@ -167,11 +125,13 @@ fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
             .right => .down,
             .left => .up,
         };
-        const other = place(a, turned, f, boxes, labels) catch return;
+        const alt_boxes = a.dupe(Box, boxes) catch return;
+        const other = place(a, turned, f, alt_boxes, labels) catch return;
         if (other[0] < size[0]) {
             dir = turned;
             size = other;
-        } else _ = place(a, dir, f, boxes, labels) catch return;
+            @memcpy(boxes, alt_boxes);
+        }
     }
     const k = std.math.clamp(room / size[0], min_scale, 1);
     for (boxes) |*b| {
@@ -190,6 +150,7 @@ fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
     defer outer.end();
     const canvas = ui.div(c).w(W).h(H);
     defer canvas.end();
+    const cv = ui.canvas(c, .{ .absolute = true, .width = .{ .px = W }, .height = .{ .px = H } });
     const ink = pal.muted;
     for ([_]Pass{ .lines, .labels }) |pass| {
         var back_k: f32 = 0;
@@ -199,10 +160,10 @@ fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
             const t = boxes[e.to];
             if (i < f.back.len and f.back[i]) {
                 back_k += 1;
-                backEdge(c, pass, dir, s, t, e, W, H, back_k, ink, pal, k);
-            } else forwardEdge(c, pass, dir, s, t, e, ink, pal, k);
+                backEdge(c, cv, pass, dir, s, t, e, W, H, back_k, ink, pal, k);
+            } else forwardEdge(c, cv, pass, dir, s, t, e, ink, pal, k);
         }
-        if (pass == .lines) for (f.nodes, boxes) |node, b| shape(c, node, b, pal, k);
+        if (pass == .lines) for (f.nodes, boxes) |node, b| shape(c, cv, node, b, pal, k);
     }
 }
 
@@ -265,26 +226,49 @@ fn place(a: std.mem.Allocator, dir: mm.Dir, f: mm.Flow, boxes: []Box, labels: []
     };
 }
 
-fn shape(c: *ui.Context, node: mm.Node, b: Box, pal: render.Palette, k: f32) void {
+fn shape(c: *ui.Context, cv: *ui.Canvas, node: mm.Node, b: Box, pal: render.Palette, k: f32) void {
     const fill = if (node.shape == .diamond) pal.bg.mix(pal.accent, 0.14) else pal.bg;
     const edge = if (node.shape == .diamond) pal.bg.mix(pal.accent, 0.65) else pal.border.mix(pal.ink, 0.22);
     switch (node.shape) {
-        .start => return rect(c, b.x, b.y, b.w, b.h, pal.ink, b.w / 2),
+        .start => return rect(cv, b.x, b.y, b.w, b.h, pal.ink, b.w / 2),
         .end => {
-            panel(c, b.x, b.y, b.w, b.h, pal.bg, pal.ink, b.w / 2);
-            rect(c, b.x + 4, b.y + 4, b.w - 8, b.h - 8, pal.ink, (b.w - 8) / 2);
+            panel(cv, b.x, b.y, b.w, b.h, pal.bg, pal.ink, b.w / 2);
+            rect(cv, b.x + 4, b.y + 4, b.w - 8, b.h - 8, pal.ink, (b.w - 8) / 2);
             return;
         },
-        .diamond => strips(c, b.x, b.y, b.w, b.h, fill, edge, diamondHalf),
-        .hexagon => strips(c, b.x, b.y, b.w, b.h, fill, edge, hexagonHalf),
-        .circle, .stadium => panel(c, b.x, b.y, b.w, b.h, fill, edge, b.h / 2),
-        .round, .cylinder => panel(c, b.x, b.y, b.w, b.h, fill, edge, 10),
-        .subroutine => {
-            panel(c, b.x, b.y, b.w, b.h, fill, edge, 6);
-            rect(c, b.x + 7 * k, b.y + 1, 1.25, b.h - 2, edge, 0);
-            rect(c, b.x + b.w - 8 * k, b.y + 1, 1.25, b.h - 2, edge, 0);
+        .diamond => {
+            const pts = [_]ui.Point{
+                .{ .x = b.x + b.w / 2, .y = b.y },
+                .{ .x = b.x + b.w, .y = b.y + b.h / 2 },
+                .{ .x = b.x + b.w / 2, .y = b.y + b.h },
+                .{ .x = b.x, .y = b.y + b.h / 2 },
+                .{ .x = b.x + b.w / 2, .y = b.y },
+            };
+            cv.fill(pts[0..4], fill);
+            cv.polyline(&pts, .{ .width = 1.4, .color = edge });
         },
-        .rect, .flag => panel(c, b.x, b.y, b.w, b.h, fill, edge, 6),
+        .hexagon => {
+            const inset = b.w * 0.14;
+            const pts = [_]ui.Point{
+                .{ .x = b.x + inset, .y = b.y },
+                .{ .x = b.x + b.w - inset, .y = b.y },
+                .{ .x = b.x + b.w, .y = b.y + b.h / 2 },
+                .{ .x = b.x + b.w - inset, .y = b.y + b.h },
+                .{ .x = b.x + inset, .y = b.y + b.h },
+                .{ .x = b.x, .y = b.y + b.h / 2 },
+                .{ .x = b.x + inset, .y = b.y },
+            };
+            cv.fill(pts[0..6], fill);
+            cv.polyline(&pts, .{ .width = 1.4, .color = edge });
+        },
+        .circle, .stadium => panel(cv, b.x, b.y, b.w, b.h, fill, edge, b.h / 2),
+        .round, .cylinder => panel(cv, b.x, b.y, b.w, b.h, fill, edge, 10),
+        .subroutine => {
+            panel(cv, b.x, b.y, b.w, b.h, fill, edge, 6);
+            rect(cv, b.x + 7 * k, b.y + 1, 1.25, b.h - 2, edge, 0);
+            rect(cv, b.x + b.w - 8 * k, b.y + 1, 1.25, b.h - 2, edge, 0);
+        },
+        .rect, .flag => panel(cv, b.x, b.y, b.w, b.h, fill, edge, 6),
     }
     var st = label_style;
     st.size *= k;
@@ -293,7 +277,7 @@ fn shape(c: *ui.Context, node: mm.Node, b: Box, pal: render.Palette, k: f32) voi
     label(c, b.x + inset, b.y, b.w - 2 * inset, b.h, node.label, st);
 }
 
-fn forwardEdge(c: *ui.Context, pass: Pass, dir: mm.Dir, s: Box, t: Box, e: mm.Edge, ink: ui.Color, pal: render.Palette, k: f32) void {
+fn forwardEdge(c: *ui.Context, cv: *ui.Canvas, pass: Pass, dir: mm.Dir, s: Box, t: Box, e: mm.Edge, ink: ui.Color, pal: render.Palette, k: f32) void {
     const head = 8 * k;
     if (dir == .down or dir == .up) {
         const sx = s.x + s.w / 2;
@@ -303,14 +287,14 @@ fn forwardEdge(c: *ui.Context, pass: Pass, dir: mm.Dir, s: Box, t: Box, e: mm.Ed
         const ty = if (down) t.y else t.y + t.h;
         const mid = trunk(s, t, down, ty, k);
         if (pass == .labels) {
-            if (e.label.len > 0) edgeLabel(c, tx, (mid + if (down) ty - head else ty + head) / 2, e.label, pal, k);
+            if (e.label.len > 0) edgeLabel(c, cv, tx, (mid + if (down) ty - head else ty + head) / 2, e.label, pal, k);
             return;
         }
-        line(c, sx, sy, sx, mid, e.line, ink);
-        line(c, sx, mid, tx, mid, e.line, ink);
-        line(c, tx, mid, tx, ty, e.line, ink);
-        if (e.head) arrow(c, tx, ty, if (down) .down else .up, ink);
-        if (e.tail) arrow(c, sx, sy, if (down) .up else .down, ink);
+        line(cv, sx, sy, sx, mid, e.line, ink);
+        line(cv, sx, mid, tx, mid, e.line, ink);
+        line(cv, tx, mid, tx, ty, e.line, ink);
+        if (e.head) arrow(cv, tx, ty, if (down) .down else .up, ink);
+        if (e.tail) arrow(cv, sx, sy, if (down) .up else .down, ink);
     } else {
         const sy = s.y + s.h / 2;
         const ty = t.y + t.h / 2;
@@ -319,14 +303,14 @@ fn forwardEdge(c: *ui.Context, pass: Pass, dir: mm.Dir, s: Box, t: Box, e: mm.Ed
         const tx = if (right) t.x else t.x + t.w;
         const mid = trunk(s, t, right, tx, k);
         if (pass == .labels) {
-            if (e.label.len > 0) edgeLabel(c, (mid + if (right) tx - head else tx + head) / 2, ty, e.label, pal, k);
+            if (e.label.len > 0) edgeLabel(c, cv, (mid + if (right) tx - head else tx + head) / 2, ty, e.label, pal, k);
             return;
         }
-        line(c, sx, sy, mid, sy, e.line, ink);
-        line(c, mid, sy, mid, ty, e.line, ink);
-        line(c, mid, ty, tx, ty, e.line, ink);
-        if (e.head) arrow(c, tx, ty, if (right) .right else .left, ink);
-        if (e.tail) arrow(c, sx, sy, if (right) .left else .right, ink);
+        line(cv, sx, sy, mid, sy, e.line, ink);
+        line(cv, mid, sy, mid, ty, e.line, ink);
+        line(cv, mid, ty, tx, ty, e.line, ink);
+        if (e.head) arrow(cv, tx, ty, if (right) .right else .left, ink);
+        if (e.tail) arrow(cv, sx, sy, if (right) .left else .right, ink);
     }
 }
 
@@ -340,40 +324,40 @@ fn gapMid(s: Box, t: Box, forward: bool) f32 {
     return if (forward) (s.r1 + t.r0) / 2 else (s.r0 + t.r1) / 2;
 }
 
-fn backEdge(c: *ui.Context, pass: Pass, dir: mm.Dir, s: Box, t: Box, e: mm.Edge, W: f32, H: f32, lane_k: f32, ink: ui.Color, pal: render.Palette, k: f32) void {
+fn backEdge(c: *ui.Context, cv: *ui.Canvas, pass: Pass, dir: mm.Dir, s: Box, t: Box, e: mm.Edge, W: f32, H: f32, lane_k: f32, ink: ui.Color, pal: render.Palette, k: f32) void {
     if (dir == .down or dir == .up) {
         const lane = W - 8 - (lane_k - 1) * 10;
         const sy = s.y + s.h / 2;
         const ty = t.y + t.h / 2;
         if (pass == .labels) {
-            if (e.label.len > 0) edgeLabel(c, lane, (sy + ty) / 2, e.label, pal, k);
+            if (e.label.len > 0) edgeLabel(c, cv, lane, (sy + ty) / 2, e.label, pal, k);
             return;
         }
-        line(c, s.x + s.w, sy, lane, sy, e.line, ink);
-        line(c, lane, sy, lane, ty, e.line, ink);
-        line(c, lane, ty, t.x + t.w, ty, e.line, ink);
-        if (e.head) arrow(c, t.x + t.w, ty, .left, ink);
+        line(cv, s.x + s.w, sy, lane, sy, e.line, ink);
+        line(cv, lane, sy, lane, ty, e.line, ink);
+        line(cv, lane, ty, t.x + t.w, ty, e.line, ink);
+        if (e.head) arrow(cv, t.x + t.w, ty, .left, ink);
     } else {
         const lane = H - 8 - (lane_k - 1) * 10;
         const sx = s.x + s.w / 2;
         const tx = t.x + t.w / 2;
         if (pass == .labels) {
-            if (e.label.len > 0) edgeLabel(c, (sx + tx) / 2, lane, e.label, pal, k);
+            if (e.label.len > 0) edgeLabel(c, cv, (sx + tx) / 2, lane, e.label, pal, k);
             return;
         }
-        line(c, sx, s.y + s.h, sx, lane, e.line, ink);
-        line(c, sx, lane, tx, lane, e.line, ink);
-        line(c, tx, lane, tx, t.y + t.h, e.line, ink);
-        if (e.head) arrow(c, tx, t.y + t.h, .up, ink);
+        line(cv, sx, s.y + s.h, sx, lane, e.line, ink);
+        line(cv, sx, lane, tx, lane, e.line, ink);
+        line(cv, tx, lane, tx, t.y + t.h, e.line, ink);
+        if (e.head) arrow(cv, tx, t.y + t.h, .up, ink);
     }
 }
 
-fn edgeLabel(c: *ui.Context, x: f32, y: f32, text: []const u8, pal: render.Palette, k: f32) void {
+fn edgeLabel(c: *ui.Context, cv: *ui.Canvas, x: f32, y: f32, text: []const u8, pal: render.Palette, k: f32) void {
     var st = small_style;
     st.size *= k;
     st.color = pal.muted;
     const sz = patch(measure(c, text, st));
-    rect(c, x - sz[0] / 2, y - sz[1] / 2, sz[0], sz[1], pal.card, 4);
+    rect(cv, x - sz[0] / 2, y - sz[1] / 2, sz[0], sz[1], pal.card, 4);
     label(c, x - sz[0] / 2, y - sz[1] / 2, sz[0], sz[1], text, st);
 }
 

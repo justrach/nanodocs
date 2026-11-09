@@ -223,12 +223,15 @@ fn renderBlock(
         },
         .code => |code| renderCodeBlock(c, code.lang, code.text, pal, idx),
         .mermaid => |m| renderMermaidBlock(c, m.source, m.diagram, pal, idx, content_width),
-        .callout => |ca| renderCallout(c, ca.kind, ca.title, ca.rich, pal),
+        .callout => |ca| renderCallout(c, ca.kind, ca.title, ca.rich, pal, content_width),
         .list_item => |li| {
+            const indent = @as(f32, @floatFromInt(li.depth)) * 16.0;
+            const marker_w: f32 = if (li.ordered > 0) 22 else 14;
+            const text_w = @max(80, content_width - indent - marker_w - 8);
             ui.row(c, .{
                 .width = .fill,
                 .gap = 8,
-                .padding = .{ .left = @as(f32, @floatFromInt(li.depth)) * 16.0 },
+                .padding = .{ .left = indent },
                 .align_items = .start,
             });
             defer ui.end(c);
@@ -238,12 +241,14 @@ fn renderBlock(
                 c.print("{d}.", .{li.ordered})
             else
                 "•";
+            ui.column(c, .{ .width = .{ .px = marker_w } });
             ui.text(c, marker, .{
                 .size = 14,
                 .weight = .semibold,
                 .color = if (li.checked != null and li.checked.?) pal.accent else pal.muted,
             });
-            ui.column(c, .{ .grow = 1 });
+            ui.end(c);
+            ui.column(c, .{ .width = .{ .px = text_w } });
             defer ui.end(c);
             ui.richText(c, li.rich.text, li.rich.spans, .{
                 .size = 14.5,
@@ -252,7 +257,7 @@ fn renderBlock(
                 .wrap = true,
             });
         },
-        .table => |tbl| renderTable(c, tbl.headers, tbl.rows, pal),
+        .table => |tbl| renderTable(c, tbl.headers, tbl.rows, pal, content_width),
         .image => |im| {
             if (!live_resizing) {
                 if (images.get(gpa, io, root_dir, im.src)) |bytes| {
@@ -329,11 +334,8 @@ fn renderCodeBlock(c: *ui.Context, lang: []const u8, code_text: []const u8, pal:
 
     ui.row(c, .{
         .width = .fill,
-        .radius = 10,
         .padding = .{ .left = 12, .right = 10, .top = 6, .bottom = 6 },
         .align_items = .center,
-        .border = pal.border,
-        .border_width = 1,
     });
     ui.text(c, if (lang.len > 0) lang else "code", .{ .size = 11, .weight = .semibold, .color = pal.muted, .mono = true });
     ui.spacer(c);
@@ -349,6 +351,9 @@ fn renderCodeBlock(c: *ui.Context, lang: []const u8, code_text: []const u8, pal:
     if (cp.clicked) {
         c.clipboard.write(c.clipboard.ctx, code_text);
     }
+    ui.end(c);
+
+    ui.row(c, .{ .width = .fill, .height = .{ .px = 1 }, .background = pal.border });
     ui.end(c);
 
     ui.column(c, .{ .width = .fill, .padding = .all(12) });
@@ -375,12 +380,8 @@ fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("merm
     // Header bar
     ui.row(c, .{
         .width = .fill,
-        .radius = 12,
         .padding = .{ .left = 12, .right = 10, .top = 7, .bottom = 7 },
         .align_items = .center,
-        .background = pal.code_bg,
-        .border = pal.border,
-        .border_width = 1,
         .gap = 8,
     });
     ui.row(c, .{
@@ -400,13 +401,16 @@ fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("merm
     const cp = ui.pressable(c, .{
         .padding = .{ .left = 8, .right = 8, .top = 2, .bottom = 2 },
         .radius = 5,
-        .background = pal.card,
+        .background = pal.code_bg,
     }, pal.border);
     ui.text(c, "Copy", .{ .size = 11, .weight = .medium, .color = pal.muted });
     ui.end(c);
     if (cp.clicked) {
         c.clipboard.write(c.clipboard.ctx, source);
     }
+    ui.end(c);
+
+    ui.row(c, .{ .width = .fill, .height = .{ .px = 1 }, .background = pal.border });
     ui.end(c);
 
     // Diagram canvas
@@ -418,7 +422,7 @@ fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("merm
     }
 }
 
-fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: ui.markdown.Rich, pal: Palette) void {
+fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: ui.markdown.Rich, pal: Palette, content_width: f32) void {
     const accent: ui.Color = switch (kind) {
         .blockquote => pal.muted,
         .note => .hex(0x2563eb),
@@ -437,7 +441,7 @@ fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: ui
     defer ui.end(c);
     ui.row(c, .{ .width = .{ .px = 4 }, .height = .fill, .radius = 4, .background = accent });
     ui.end(c);
-    ui.column(c, .{ .grow = 1, .padding = .all(12), .gap = 4 });
+    ui.column(c, .{ .width = .{ .px = @max(80, content_width - 4) }, .padding = .all(12), .gap = 4 });
     defer ui.end(c);
     if (title.len > 0) {
         ui.text(c, title, .{ .size = 12.5, .weight = .bold, .color = accent });
@@ -461,7 +465,13 @@ fn colGrow(col_idx: usize, num_cols: usize) f32 {
     return 1.0;
 }
 
-fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []const md.Cell, pal: Palette) void {
+fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []const md.Cell, pal: Palette, content_width: f32) void {
+    const num_cols = if (headers.len > 0) headers.len else if (rows.len > 0) rows[0].len else 1;
+    var total_grow: f32 = 0;
+    for (0..num_cols) |ci| total_grow += colGrow(ci, num_cols);
+    if (total_grow <= 0) total_grow = 1;
+    const row_inner_w = @max(120, content_width - 24 - 12 * @as(f32, @floatFromInt(num_cols -| 1)));
+
     ui.column(c, .{
         .width = .fill,
         .radius = 10,
@@ -474,13 +484,12 @@ fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []cons
     if (headers.len > 0) {
         ui.row(c, .{
             .width = .fill,
-            .radius = 10,
             .padding = .{ .left = 12, .right = 12, .top = 8, .bottom = 8 },
-            .background = pal.code_bg,
             .gap = 12,
         });
         for (headers, 0..) |h, ci| {
-            ui.column(c, .{ .width = .fill, .grow = colGrow(ci, headers.len) });
+            const col_w = @max(36, @floor(row_inner_w * colGrow(ci, num_cols) / total_grow));
+            ui.column(c, .{ .width = .{ .px = col_w } });
             ui.text(c, h, .{ .size = 12, .weight = .bold, .color = pal.ink, .wrap = true });
             ui.end(c);
         }
@@ -489,15 +498,18 @@ fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []cons
 
     for (rows, 0..) |r, ri| {
         ui.keyInt(c, ri);
+        if (headers.len > 0 or ri > 0) {
+            ui.row(c, .{ .width = .fill, .height = .{ .px = 1 }, .background = pal.border });
+            ui.end(c);
+        }
         ui.row(c, .{
             .width = .fill,
             .padding = .{ .left = 12, .right = 12, .top = 8, .bottom = 8 },
-            .border = pal.border,
-            .border_width = 1,
             .gap = 12,
         });
         for (r, 0..) |cell, ci| {
-            ui.column(c, .{ .width = .fill, .grow = colGrow(ci, r.len) });
+            const col_w = @max(36, @floor(row_inner_w * colGrow(ci, num_cols) / total_grow));
+            ui.column(c, .{ .width = .{ .px = col_w } });
             ui.richText(c, cell.rich.text, cell.rich.spans, .{ .size = 12.5, .color = pal.ink, .wrap = true });
             ui.end(c);
         }
@@ -513,11 +525,7 @@ pub fn glassPill(c: *ui.Context, pal: Palette) ui.Div {
         .px(10)
         .py(5)
         .roundedFull()
+        .bg(pal.card)
         .border(pal.border)
-        .borderW(1)
-        .glass(.{
-            .style = .regular,
-            .tint = pal.glass_tint,
-            .blur = 10,
-        });
+        .borderW(1);
 }

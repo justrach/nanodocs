@@ -76,6 +76,7 @@ pub fn seq(c: *ui.Context, s: mm.Seq, room: f32, pal: render.Palette) void {
     defer outer.end();
     const canvas = ui.div(c).w(W).h(H);
     defer canvas.end();
+    const cv = ui.canvas(c, .{ .absolute = true, .width = .{ .px = W }, .height = .{ .px = H } });
 
     const ink = pal.muted;
     const edge_strong = pal.border.mix(pal.ink, 0.22);
@@ -83,7 +84,7 @@ pub fn seq(c: *ui.Context, s: mm.Seq, room: f32, pal: render.Palette) void {
     small_ink.size *= k;
     small_ink.color = pal.ink;
 
-    for (centers) |cx| v.line(c, cx, 12 * k + box_h, cx, bottom, .dotted, edge_strong);
+    for (centers) |cx| v.line(cv, cx, 12 * k + box_h, cx, bottom, .dotted, edge_strong);
     for (s.steps, rows) |step, row| switch (step) {
         .message => |m| {
             if (m.from >= n or m.to >= n) continue;
@@ -93,15 +94,15 @@ pub fn seq(c: *ui.Context, s: mm.Seq, room: f32, pal: render.Palette) void {
             const kind: mm.Line = if (m.dashed) .dotted else .solid;
             if (m.from == m.to) {
                 const ly = row + sz[1] + 4 * k;
-                v.line(c, x0, ly, x0 + 30 * k, ly, kind, ink);
-                v.line(c, x0 + 30 * k, ly, x0 + 30 * k, ly + 16 * k, kind, ink);
-                v.line(c, x0 + 30 * k, ly + 16 * k, x0, ly + 16 * k, kind, ink);
-                if (m.head) v.arrow(c, x0, ly + 16 * k, .left, ink);
+                v.line(cv, x0, ly, x0 + 30 * k, ly, kind, ink);
+                v.line(cv, x0 + 30 * k, ly, x0 + 30 * k, ly + 16 * k, kind, ink);
+                v.line(cv, x0 + 30 * k, ly + 16 * k, x0, ly + 16 * k, kind, ink);
+                if (m.head) v.arrow(cv, x0, ly + 16 * k, .left, ink);
                 v.label(c, x0 + 6 * k, row, sz[0] + 8, sz[1], m.text, small_ink);
             } else {
                 const ly = row + sz[1] + 6 * k;
-                v.line(c, x0, ly, x1, ly, kind, ink);
-                if (m.head) v.arrow(c, x1, ly, if (x1 > x0) .right else .left, ink);
+                v.line(cv, x0, ly, x1, ly, kind, ink);
+                if (m.head) v.arrow(cv, x1, ly, if (x1 > x0) .right else .left, ink);
                 const mid = (x0 + x1) / 2;
                 v.label(c, mid - sz[0] / 2 - 4, row, sz[0] + 8, sz[1], m.text, small_ink);
             }
@@ -121,13 +122,13 @@ pub fn seq(c: *ui.Context, s: mm.Seq, room: f32, pal: render.Palette) void {
             };
             const note_bg = pal.bg.mix(.hex(0xd97706), 0.12);
             const note_edge = pal.border.mix(.hex(0xd97706), 0.45);
-            v.panel(c, nx, row + 2 * k, nw, h, note_bg, note_edge, 5);
+            v.panel(cv, nx, row + 2 * k, nw, h, note_bg, note_edge, 5);
             v.label(c, nx, row + 2 * k, nw, h, nt.text, small_ink);
         },
         .section => |text| {
             const sz = v.measure(c, text, small_ink);
-            v.rect(c, 12 * k, row + 12 * k, W - 24 * k, 1, pal.border, 0);
-            v.panel(c, 12 * k, row + 3 * k, sz[0] + 16 * k, sz[1] + 4 * k, pal.bg, edge_strong, 4);
+            v.rect(cv, 12 * k, row + 12 * k, W - 24 * k, 1, pal.border, 0);
+            v.panel(cv, 12 * k, row + 3 * k, sz[0] + 16 * k, sz[1] + 4 * k, pal.bg, edge_strong, 4);
             var st = small_ink;
             st.weight = .semibold;
             st.color = pal.muted;
@@ -136,7 +137,7 @@ pub fn seq(c: *ui.Context, s: mm.Seq, room: f32, pal: render.Palette) void {
     };
     for (s.actors, centers, widths) |actor, cx, w| {
         for ([_]f32{ 12 * k, bottom }) |by| {
-            v.panel(c, cx - w / 2, by, w, box_h, pal.bg, edge_strong, if (actor.person) box_h / 2 else 6);
+            v.panel(cv, cx - w / 2, by, w, box_h, pal.bg, edge_strong, if (actor.person) box_h / 2 else 6);
             var st = v.label_style;
             st.size *= k;
             st.weight = .semibold;

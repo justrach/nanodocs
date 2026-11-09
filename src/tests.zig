@@ -148,9 +148,23 @@ test "nanodocs UI renders Mermaid diagrams offscreen in Tester and switches mode
     try testing.expect(t.containsText("Paper"));
 
     // Scrolling the document uses nanoui's retained scroll skirt (0 layout passes)
-    t.scroll(600, 400, -16);
-    try testing.expect(t.ctx.stats.retained);
-    try testing.expectEqual(@as(usize, 0), t.ctx.stats.passes);
+    // and brings below-the-fold table/Mermaid instances into the viewport with zero gaps.
+    for (0..8) |_| {
+        t.scroll(600, 400, -36);
+        try testing.expect(t.ctx.stats.retained);
+        try testing.expectEqual(@as(usize, 0), t.ctx.stats.passes);
+        var visible_in_lower_band: usize = 0;
+        for (t.instances.items) |inst| {
+            if (inst.rect[0] > 230 and inst.rect[1] >= 520 and inst.rect[1] <= 740) {
+                visible_in_lower_band += 1;
+            }
+        }
+        try testing.expect(visible_in_lower_band >= 10);
+    }
+    for (0..8) |_| {
+        t.scroll(600, 400, 36);
+        try testing.expect(t.ctx.stats.retained);
+    }
 
     try t.clickText("Paper");
     try testing.expectEqual(@import("render.zig").CanvasMode.dark, state.mode);
@@ -171,7 +185,7 @@ test "nanodocs UI renders Mermaid diagrams offscreen in Tester and switches mode
 
     // Switch to Split Edit mode and insert a live Mermaid flowchart
     t.resize(1120, 760);
-    try t.clickText("Rendered");
+    try t.clickText("🔒 Read-Only");
     try testing.expectEqual(@import("editor.zig").ViewMode.split, state.view_mode);
     try testing.expect(t.containsText("LIVE EDITOR"));
     try t.clickText("+ Flowchart");

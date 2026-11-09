@@ -106,16 +106,17 @@ pub fn renderDocument(
     io: std.Io,
     root_dir: []const u8,
     live_resizing: bool,
+    content_width: f32,
 ) void {
     ui.column(c, .{
         .width = .fill,
         .align_items = .center,
-        .padding = .{ .top = 28, .bottom = 64, .left = 32, .right = 32 },
+        .padding = .{ .top = 24, .bottom = 64, .left = 20, .right = 20 },
     });
     defer ui.end(c);
 
     ui.column(c, .{
-        .width = .{ .px = 700 },
+        .width = .{ .px = content_width },
         .gap = 14,
     });
     defer ui.end(c);
@@ -127,7 +128,7 @@ pub fn renderDocument(
 
     for (doc.blocks, 0..) |b, idx| {
         ui.keyInt(c, idx);
-        renderBlock(c, b, idx, pal, images, gpa, io, root_dir, live_resizing);
+        renderBlock(c, b, idx, pal, images, gpa, io, root_dir, live_resizing, content_width);
     }
 }
 
@@ -141,6 +142,7 @@ fn renderBlock(
     io: std.Io,
     root_dir: []const u8,
     live_resizing: bool,
+    content_width: f32,
 ) void {
     switch (b) {
         .heading => |h| {
@@ -223,7 +225,7 @@ fn renderBlock(
             }
         },
         .code => |code| renderCodeBlock(c, code.lang, code.text, pal, idx),
-        .mermaid => |m| renderMermaidBlock(c, m.source, m.diagram, pal, idx),
+        .mermaid => |m| renderMermaidBlock(c, m.source, m.diagram, pal, idx, content_width),
         .callout => |ca| renderCallout(c, ca.kind, ca.title, ca.text, pal),
         .list_item => |li| {
             ui.row(c, .{
@@ -269,7 +271,7 @@ fn renderBlock(
                     _ = ui.image(c, .{
                         .key = im.src,
                         .source = .{ .encoded = bytes },
-                        .max_width = @min(im.width, 640),
+                        .max_width = @min(im.width, content_width - 20),
                         .max_height = 420,
                         .radius = 10,
                     });
@@ -307,7 +309,7 @@ fn renderBlock(
             });
             for (det.body, 0..) |inner_b, bi| {
                 ui.keyInt(c, bi);
-                renderBlock(c, inner_b, bi, pal, images, gpa, io, root_dir, live_resizing);
+                renderBlock(c, inner_b, bi, pal, images, gpa, io, root_dir, live_resizing, content_width - 28);
             }
         },
         .rule => {
@@ -366,7 +368,7 @@ fn renderCodeBlock(c: *ui.Context, lang: []const u8, code_text: []const u8, pal:
     });
 }
 
-fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("mermaid.zig").Diagram, pal: Palette, idx: usize) void {
+fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("mermaid.zig").Diagram, pal: Palette, idx: usize, content_width: f32) void {
     ui.column(c, .{
         .width = .fill,
         .radius = 12,
@@ -396,7 +398,9 @@ fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("merm
     ui.end(c);
     ui.text(c, render_mermaid.kindLabel(diagram), .{ .size = 11, .weight = .semibold, .color = pal.muted, .mono = true });
     ui.spacer(c);
-    ui.text(c, "Native GPU · 0ms parse/frame", .{ .size = 10.5, .color = pal.muted });
+    if (content_width >= 520) {
+        ui.text(c, "Native GPU", .{ .size = 10.5, .color = pal.muted });
+    }
     const copy_id = c.print("copy-mermaid-{d}", .{idx});
     ui.key(c, copy_id);
     const cp = ui.pressable(c, .{
@@ -412,9 +416,10 @@ fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("merm
     ui.end(c);
 
     // Diagram canvas
-    ui.column(c, .{ .width = .fill, .padding = .{ .top = 16, .bottom = 16, .left = 16, .right = 16 } });
+    ui.column(c, .{ .width = .fill, .padding = .{ .top = 16, .bottom = 16, .left = 14, .right = 14 } });
     defer ui.end(c);
-    if (!render_mermaid.draw(c, diagram, 660, pal)) {
+    const room = @max(content_width - 36, 300);
+    if (!render_mermaid.draw(c, diagram, room, pal)) {
         ui.text(c, source, .{ .size = 12, .mono = true, .color = pal.ink, .wrap = true });
     }
 }

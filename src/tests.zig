@@ -160,6 +160,14 @@ test "nanodocs UI renders Mermaid diagrams offscreen in Tester and switches mode
 
     try t.clickText("MCP · :7740");
     try testing.expect(state.show_mcp_panel);
+
+    // Narrow window resize (680x540): top glass capsules compact cleanly and fit inside the window
+    t.resize(680, 540);
+    const env_rect = t.findText(".env") orelse return error.TextNotFound;
+    try testing.expect(env_rect.x + env_rect.w <= 680);
+    const gpu_rect = t.findText("120Hz Metal GPU Frame") orelse return error.TextNotFound;
+    try testing.expect(gpu_rect.x >= 196);
+    try testing.expect(gpu_rect.x + gpu_rect.w <= 680);
 }
 
 test "MCP server: legacy initialize, stateless 2026-07-28 discover, tools/list and render_mermaid" {

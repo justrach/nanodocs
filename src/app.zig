@@ -95,6 +95,9 @@ pub const AppState = struct {
         }
 
         const pal = render.Palette.forMode(self.mode);
+        const sidebar_w: f32 = if (!self.show_sidebar) 0 else if (c.size.w < 860) 196 else 248;
+        const pane_w: f32 = @max(c.size.w - sidebar_w, 240);
+        const content_width: f32 = @min(@max(pane_w - 48, 200), 700);
 
         ui.row(c, .{
             .width = .fill,
@@ -104,23 +107,25 @@ pub const AppState = struct {
         defer ui.end(c);
 
         if (self.show_sidebar) {
-            self.renderSidebar(c, pal);
+            self.renderSidebar(c, pal, sidebar_w);
         }
 
         ui.column(c, .{
-            .grow = 1,
+            .width = .{ .px = pane_w },
             .height = .fill,
             .background = pal.bg,
         });
         defer ui.end(c);
 
-        self.renderTopGlassBar(c, pal);
+        self.renderTopGlassBar(c, pal, pane_w);
+        ui.row(c, .{ .width = .fill, .height = .{ .px = 1 }, .background = pal.border });
+        ui.end(c);
 
         if (self.show_mcp_panel) {
-            self.renderMcpPanel(c, pal);
+            self.renderMcpPanel(c, pal, pane_w);
         }
         if (self.show_env_panel) {
-            self.renderEnvPanel(c, pal);
+            self.renderEnvPanel(c, pal, pane_w);
         }
 
         if (self.shelf.entries.items.len == 0) {
@@ -150,12 +155,13 @@ pub const AppState = struct {
             self.io,
             self.shelf.root_dir,
             c.live_resizing,
+            content_width,
         );
     }
 
-    fn renderSidebar(self: *AppState, c: *ui.Context, pal: render.Palette) void {
+    fn renderSidebar(self: *AppState, c: *ui.Context, pal: render.Palette, sidebar_w: f32) void {
         ui.column(c, .{
-            .width = .{ .px = 248 },
+            .width = .{ .px = sidebar_w },
             .height = .fill,
             .background = pal.sidebar,
             .border = pal.border,
@@ -249,14 +255,15 @@ pub const AppState = struct {
         }
     }
 
-    fn renderTopGlassBar(self: *AppState, c: *ui.Context, pal: render.Palette) void {
+    fn renderTopGlassBar(self: *AppState, c: *ui.Context, pal: render.Palette, pane_w: f32) void {
+        const compact = pane_w < 820;
+        const pad_x: f32 = if (compact) 12 else 20;
         ui.row(c, .{
             .width = .fill,
-            .padding = .{ .top = 12, .bottom = 10, .left = 20, .right = 20 },
+            .padding = .{ .top = 12, .bottom = 10, .left = pad_x, .right = pad_x },
             .align_items = .center,
-            .gap = 10,
-            .border = pal.border,
-            .border_width = 1,
+            .gap = 8,
+            .background = pal.bg,
         });
         defer ui.end(c);
 
@@ -276,11 +283,18 @@ pub const AppState = struct {
                 c.changed = true;
             }
 
-            if (self.shelf.entries.items.len > 0) {
+            if (self.shelf.entries.items.len > 0 and (pane_w >= 560 or !self.show_sidebar)) {
                 const active = self.shelf.entries.items[@min(self.selected, self.shelf.entries.items.len - 1)];
-                ui.text(c, active.name, .{ .size = 12.5, .weight = .semibold, .color = pal.ink });
-                ui.text(c, "·", .{ .size = 12, .color = pal.muted });
-                ui.text(c, c.print("{d} words", .{active.doc.word_count}), .{ .size = 11.5, .color = pal.muted });
+                const max_name: usize = if (pane_w < 640) 14 else if (compact) 22 else 44;
+                const display_name = if (active.name.len > max_name)
+                    c.print("{s}…", .{active.name[0..max_name]})
+                else
+                    active.name;
+                ui.text(c, display_name, .{ .size = 12, .weight = .semibold, .color = pal.ink });
+                if (!compact and self.status_toast.len == 0) {
+                    ui.text(c, "·", .{ .size = 12, .color = pal.muted });
+                    ui.text(c, c.print("{d} words", .{active.doc.word_count}), .{ .size = 11.5, .color = pal.muted });
+                }
             }
             if (self.status_toast.len > 0) {
                 ui.row(c, .{
@@ -288,7 +302,8 @@ pub const AppState = struct {
                     .radius = 999,
                     .background = pal.accent,
                 });
-                ui.text(c, self.status_toast, .{ .size = 10.5, .weight = .bold, .color = .hex(0xffffff) });
+                const toast_lbl = if (pane_w < 920) "⚡ MCP" else self.status_toast;
+                ui.text(c, toast_lbl, .{ .size = 10.5, .weight = .bold, .color = .hex(0xffffff) });
                 ui.end(c);
             }
             if (c.live_resizing) {
@@ -297,20 +312,21 @@ pub const AppState = struct {
                     .radius = 999,
                     .background = pal.accent,
                 });
-                ui.text(c, "120Hz Resize", .{ .size = 10, .weight = .bold, .color = .hex(0xffffff) });
+                ui.text(c, "120Hz", .{ .size = 10, .weight = .bold, .color = .hex(0xffffff) });
                 ui.end(c);
             }
         }
 
         ui.spacer(c);
 
-        // Right Liquid Glass capsule: Rendered/Source, Paper/Light/Dark, Pin to Shelf, Discord .env
+        // Right Liquid Glass capsule: Rendered/Source, Paper/Light/Dark, Pin to Shelf, MCP, Discord .env
         {
             const right = render.glassPill(c, pal);
             defer right.end();
+            const btn_pad: f32 = if (compact) 6 else 8;
             ui.key(c, "btn-raw");
             const raw_btn = ui.pressable(c, .{
-                .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 },
+                .padding = .{ .left = btn_pad, .right = btn_pad, .top = 3, .bottom = 3 },
                 .radius = 999,
                 .background = if (self.show_raw) pal.code_bg else .transparent,
             }, pal.code_bg);
@@ -328,7 +344,7 @@ pub const AppState = struct {
             };
             ui.key(c, "btn-mode");
             const mode_btn = ui.pressable(c, .{
-                .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 },
+                .padding = .{ .left = btn_pad, .right = btn_pad, .top = 3, .bottom = 3 },
                 .radius = 999,
                 .background = pal.code_bg,
             }, pal.border);
@@ -343,24 +359,26 @@ pub const AppState = struct {
                 c.changed = true;
             }
 
-            ui.key(c, "btn-pin-shelf");
-            const pin_btn = ui.pressable(c, .{
-                .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 },
-                .radius = 999,
-            }, pal.code_bg);
-            ui.text(c, "+ Shelf", .{ .size = 11.5, .weight = .medium, .color = pal.accent });
-            ui.end(c);
-            if (pin_btn.clicked and self.shelf.entries.items.len > 0) {
-                const active = self.shelf.entries.items[@min(self.selected, self.shelf.entries.items.len - 1)];
-                _ = self.shelf.saveArtifact(active.name, active.raw) catch {};
-                self.shelf.reload(self.explicit_file);
-                self.status_toast = "Saved to .nanoui/shelf/";
-                c.changed = true;
+            if (pane_w >= 540) {
+                ui.key(c, "btn-pin-shelf");
+                const pin_btn = ui.pressable(c, .{
+                    .padding = .{ .left = btn_pad, .right = btn_pad, .top = 3, .bottom = 3 },
+                    .radius = 999,
+                }, pal.code_bg);
+                ui.text(c, "+ Shelf", .{ .size = 11.5, .weight = .medium, .color = pal.accent });
+                ui.end(c);
+                if (pin_btn.clicked and self.shelf.entries.items.len > 0) {
+                    const active = self.shelf.entries.items[@min(self.selected, self.shelf.entries.items.len - 1)];
+                    _ = self.shelf.saveArtifact(active.name, active.raw) catch {};
+                    self.shelf.reload(self.explicit_file);
+                    self.status_toast = "Saved to .nanoui/shelf/";
+                    c.changed = true;
+                }
             }
 
             ui.key(c, "btn-mcp");
             const mcp_btn = ui.pressable(c, .{
-                .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 },
+                .padding = .{ .left = btn_pad, .right = btn_pad, .top = 3, .bottom = 3 },
                 .radius = 999,
                 .background = if (self.show_mcp_panel) pal.code_bg else .transparent,
             }, pal.code_bg);
@@ -373,7 +391,8 @@ pub const AppState = struct {
                 .background = if (is_mcp_up) .hex(0x22c55e) else pal.accent,
             });
             ui.end(c);
-            ui.text(c, c.print("MCP · :{d}", .{self.shelf.env.mcp_port}), .{ .size = 11.5, .weight = .medium, .color = pal.ink });
+            const mcp_lbl = if (compact) "MCP" else c.print("MCP · :{d}", .{self.shelf.env.mcp_port});
+            ui.text(c, mcp_lbl, .{ .size = 11.5, .weight = .medium, .color = pal.ink });
             ui.end(c);
             ui.end(c);
             if (mcp_btn.clicked) {
@@ -383,7 +402,7 @@ pub const AppState = struct {
 
             ui.key(c, "btn-env");
             const env_btn = ui.pressable(c, .{
-                .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 },
+                .padding = .{ .left = btn_pad, .right = btn_pad, .top = 3, .bottom = 3 },
                 .radius = 999,
                 .background = if (self.show_env_panel) pal.code_bg else .transparent,
             }, pal.code_bg);
@@ -396,7 +415,7 @@ pub const AppState = struct {
                 .background = if (has_discord) .hex(0x22c55e) else pal.muted,
             });
             ui.end(c);
-            ui.text(c, "Discord · .env", .{ .size = 11.5, .weight = .medium, .color = pal.ink });
+            ui.text(c, if (compact) ".env" else "Discord · .env", .{ .size = 11.5, .weight = .medium, .color = pal.ink });
             ui.end(c);
             ui.end(c);
             if (env_btn.clicked) {
@@ -406,33 +425,35 @@ pub const AppState = struct {
         }
     }
 
-    fn renderEnvPanel(self: *AppState, c: *ui.Context, pal: render.Palette) void {
+    fn renderEnvPanel(self: *AppState, c: *ui.Context, pal: render.Palette, pane_w: f32) void {
         ui.row(c, .{
             .width = .fill,
-            .padding = .{ .left = 20, .right = 20, .top = 10, .bottom = 10 },
+            .padding = .{ .left = 16, .right = 16, .top = 8, .bottom = 8 },
             .background = pal.card,
             .border = pal.border,
             .border_width = 1,
             .align_items = .center,
-            .gap = 14,
+            .gap = 10,
         });
         defer ui.end(c);
 
         const env = self.shelf.env;
         ui.text(c, c.print("Guild: {s}", .{if (env.guild_id.len > 0) env.guild_id else "not set"}), .{
-            .size = 12,
+            .size = 11.5,
             .mono = true,
             .color = pal.ink,
         });
-        ui.text(c, c.print("Invite: {s}", .{env.invite_url}), .{
-            .size = 12,
-            .color = pal.muted,
-        });
+        if (pane_w >= 720) {
+            ui.text(c, c.print("Invite: {s}", .{env.invite_url}), .{
+                .size = 11.5,
+                .color = pal.muted,
+            });
+        }
         ui.spacer(c);
 
         ui.key(c, "copy-invite");
         const cp_inv = ui.pressable(c, .{
-            .padding = .{ .left = 10, .right = 10, .top = 4, .bottom = 4 },
+            .padding = .{ .left = 9, .right = 9, .top = 4, .bottom = 4 },
             .radius = 6,
             .background = pal.code_bg,
         }, pal.border);
@@ -445,11 +466,11 @@ pub const AppState = struct {
         if (env.webhook_url.len > 0) {
             ui.key(c, "copy-webhook");
             const cp_wh = ui.pressable(c, .{
-                .padding = .{ .left = 10, .right = 10, .top = 4, .bottom = 4 },
+                .padding = .{ .left = 9, .right = 9, .top = 4, .bottom = 4 },
                 .radius = 6,
                 .background = pal.accent,
             }, pal.accent);
-            ui.text(c, "Copy GitHub Webhook", .{ .size = 11.5, .weight = .semibold, .color = .hex(0xffffff) });
+            ui.text(c, if (pane_w < 680) "Webhook" else "Copy GitHub Webhook", .{ .size = 11.5, .weight = .semibold, .color = .hex(0xffffff) });
             ui.end(c);
             if (cp_wh.clicked) {
                 const gh_wh = c.print("{s}/github", .{env.webhook_url});
@@ -458,22 +479,26 @@ pub const AppState = struct {
         }
     }
 
-    fn renderMcpPanel(self: *AppState, c: *ui.Context, pal: render.Palette) void {
+    fn renderMcpPanel(self: *AppState, c: *ui.Context, pal: render.Palette, pane_w: f32) void {
         ui.row(c, .{
             .width = .fill,
-            .padding = .{ .left = 20, .right = 20, .top = 10, .bottom = 10 },
+            .padding = .{ .left = 16, .right = 16, .top = 8, .bottom = 8 },
             .background = pal.card,
             .border = pal.border,
             .border_width = 1,
             .align_items = .center,
-            .gap = 12,
+            .gap = 10,
         });
         defer ui.end(c);
 
         const port = self.shelf.env.mcp_port;
         const calls = self.mcp_calls.load(.monotonic);
-        ui.text(c, c.print("Streamable HTTP MCP: http://127.0.0.1:{d}/mcp ({d} calls)", .{ port, calls }), .{
-            .size = 12,
+        const label_str = if (pane_w < 720)
+            c.print("http://127.0.0.1:{d}/mcp ({d})", .{ port, calls })
+        else
+            c.print("Streamable HTTP MCP: http://127.0.0.1:{d}/mcp ({d} calls)", .{ port, calls });
+        ui.text(c, label_str, .{
+            .size = 11.5,
             .mono = true,
             .color = pal.ink,
         });
@@ -481,11 +506,11 @@ pub const AppState = struct {
 
         ui.key(c, "copy-mcp-http");
         const cp_http = ui.pressable(c, .{
-            .padding = .{ .left = 10, .right = 10, .top = 4, .bottom = 4 },
+            .padding = .{ .left = 9, .right = 9, .top = 4, .bottom = 4 },
             .radius = 6,
             .background = pal.accent,
         }, pal.accent);
-        ui.text(c, "Copy HTTP MCP JSON", .{ .size = 11.5, .weight = .semibold, .color = .hex(0xffffff) });
+        ui.text(c, if (pane_w < 680) "Copy JSON" else "Copy HTTP MCP JSON", .{ .size = 11.5, .weight = .semibold, .color = .hex(0xffffff) });
         ui.end(c);
         if (cp_http.clicked) {
             const json = c.print("{{\"mcpServers\":{{\"nanodocs\":{{\"type\":\"http\",\"url\":\"http://127.0.0.1:{d}/mcp\"}}}}}}", .{port});
@@ -494,11 +519,11 @@ pub const AppState = struct {
 
         ui.key(c, "copy-mcp-claude");
         const cp_claude = ui.pressable(c, .{
-            .padding = .{ .left = 10, .right = 10, .top = 4, .bottom = 4 },
+            .padding = .{ .left = 9, .right = 9, .top = 4, .bottom = 4 },
             .radius = 6,
             .background = pal.code_bg,
         }, pal.border);
-        ui.text(c, "Copy claude mcp add", .{ .size = 11.5, .weight = .semibold, .color = pal.ink });
+        ui.text(c, if (pane_w < 680) "claude mcp" else "Copy claude mcp add", .{ .size = 11.5, .weight = .semibold, .color = pal.ink });
         ui.end(c);
         if (cp_claude.clicked) {
             const cmd = c.print("claude mcp add --transport http nanodocs http://127.0.0.1:{d}/mcp", .{port});

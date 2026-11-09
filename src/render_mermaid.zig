@@ -10,7 +10,7 @@ const mm = @import("mermaid.zig");
 const render = @import("render.zig");
 const seq_mod = @import("render_mermaid_seq.zig");
 
-pub const label_style: ui.TextStyle = .{ .size = 12.5 };
+pub const label_style: ui.TextStyle = .{ .size = 12.5, .weight = .medium };
 pub const small_style: ui.TextStyle = .{ .size = 11.5 };
 
 pub fn kindLabel(d: mm.Diagram) []const u8 {
@@ -26,7 +26,7 @@ pub fn kindLabel(d: mm.Diagram) []const u8 {
 pub fn draw(c: *ui.Context, d: mm.Diagram, room: f32, pal: render.Palette) bool {
     switch (d) {
         .flow => |f| if (f.nodes.len > 0) flow(c, f, room, pal) else return false,
-        .seq => |s| if (s.actors.len > 0) seq_mod.seq(c, s, pal) else return false,
+        .seq => |s| if (s.actors.len > 0) seq_mod.seq(c, s, room, pal) else return false,
         .pie => |p| if (p.slices.len > 0) pie(c, p, pal) else return false,
         .other => return false,
     }
@@ -134,7 +134,7 @@ const Box = struct { x: f32 = 0, y: f32 = 0, w: f32, h: f32, rank: usize = 0, r0
 const Pass = enum { lines, labels };
 const label_room: f32 = 20;
 const trunk_room: f32 = 16;
-const min_scale: f32 = 0.62;
+const min_scale: f32 = 0.38;
 
 fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
     const a = c.alloc();
@@ -151,7 +151,8 @@ fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
             },
             .diamond => .{ .w = sz[0] * 1.4 + 36, .h = sz[1] * 1.6 + 30, .rank = r },
             .hexagon => .{ .w = sz[0] + 48, .h = sz[1] + 22, .rank = r },
-            else => .{ .w = sz[0] + 28, .h = sz[1] + 18, .rank = r },
+            .subroutine => .{ .w = sz[0] + 46, .h = sz[1] + 20, .rank = r },
+            else => .{ .w = sz[0] + 32, .h = sz[1] + 20, .rank = r },
         };
     }
     const labels = a.alloc([2]f32, f.edges.len) catch return;
@@ -279,17 +280,17 @@ fn shape(c: *ui.Context, node: mm.Node, b: Box, pal: render.Palette, k: f32) voi
         .circle, .stadium => panel(c, b.x, b.y, b.w, b.h, fill, edge, b.h / 2),
         .round, .cylinder => panel(c, b.x, b.y, b.w, b.h, fill, edge, 10),
         .subroutine => {
-            panel(c, b.x, b.y, b.w, b.h, fill, edge, 5);
-            rect(c, b.x + 6, b.y, 1.25, b.h, edge, 0);
-            rect(c, b.x + b.w - 7, b.y, 1.25, b.h, edge, 0);
+            panel(c, b.x, b.y, b.w, b.h, fill, edge, 6);
+            rect(c, b.x + 7 * k, b.y + 1, 1.25, b.h - 2, edge, 0);
+            rect(c, b.x + b.w - 8 * k, b.y + 1, 1.25, b.h - 2, edge, 0);
         },
         .rect, .flag => panel(c, b.x, b.y, b.w, b.h, fill, edge, 6),
     }
     var st = label_style;
     st.size *= k;
     st.color = pal.ink;
-    st.weight = .medium;
-    label(c, b.x, b.y, b.w, b.h, node.label, st);
+    const inset: f32 = if (node.shape == .subroutine) 9 * k else 0;
+    label(c, b.x + inset, b.y, b.w - 2 * inset, b.h, node.label, st);
 }
 
 fn forwardEdge(c: *ui.Context, pass: Pass, dir: mm.Dir, s: Box, t: Box, e: mm.Edge, ink: ui.Color, pal: render.Palette, k: f32) void {

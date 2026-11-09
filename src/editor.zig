@@ -10,6 +10,7 @@ const ui = nanoui.ui;
 const md = @import("markdown.zig");
 const render = @import("render.zig");
 const shelf_mod = @import("shelf.zig");
+pub const harness_bridge = @import("harness_bridge.zig");
 
 pub const ViewMode = enum {
     rendered,
@@ -51,12 +52,14 @@ pub const EditorState = struct {
     last_feedback_msg_len: usize = 0,
     sent_count: usize = 0,
     emit_stdout: bool = false,
+    harness: harness_bridge.Bridge,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io) EditorState {
-        return .{ .gpa = gpa, .io = io };
+        return .{ .gpa = gpa, .io = io, .harness = harness_bridge.Bridge.init(gpa, io) };
     }
 
     pub fn deinit(self: *EditorState) void {
+        self.harness.deinit();
         for (&self.live_arenas) |*slot| {
             if (slot.*) |*a| a.deinit();
         }
@@ -262,31 +265,38 @@ pub const EditorState = struct {
         });
         defer ui.end(c);
 
-        // Live Agent Bridge status & receipt strip
+        // Live Agent Bridge + Harness status & receipt strip
         const agent_waiting = isAgentWaiting(self.io, shelf.root_dir);
-        ui.row(c, .{ .width = .fill, .align_items = .center, .gap = 8 });
+        ui.row(c, .{ .width = .fill, .align_items = .center, .gap = 6 });
         ui.row(c, .{
             .padding = .{ .left = 7, .right = 7, .top = 2, .bottom = 2 },
             .radius = 999,
             .background = if (agent_waiting) .hex(0x7c3aed) else pal.code_bg,
         });
-        ui.text(c, if (agent_waiting) "⚡ AGENT WAITING FOR REPLY" else "● AGENT BRIDGE READY", .{
+        ui.text(c, if (agent_waiting) "⚡ AGENT WAITING" else "● BRIDGE READY", .{
             .size = 9.5,
             .weight = .bold,
             .color = if (agent_waiting) .hex(0xffffff) else .hex(0x16a34a),
         });
         ui.end(c);
 
+        self.harness.renderBridgePills(c, pal.sidebar.r < 0.5, shelf.root_dir, shelf.env.mcp_port);
+
         if (self.last_feedback_msg_len > 0) {
             const last_msg = self.last_feedback_msg_buf[0..self.last_feedback_msg_len];
-            ui.text(c, c.print("Last sent (#{d} · {s}): \"{s}\"", .{ self.sent_count, self.last_feedback_status, last_msg }), .{
-                .size = 11,
+            const route = self.harness.lastRouteText();
+            const summary = if (route.len > 0)
+                c.print("#{d} ({s} · {s}): \"{s}\"", .{ self.sent_count, self.last_feedback_status, route, last_msg })
+            else
+                c.print("Last sent (#{d} · {s}): \"{s}\"", .{ self.sent_count, self.last_feedback_status, last_msg });
+            ui.text(c, summary, .{
+                .size = 10.5,
                 .color = pal.ink,
                 .truncate = .ellipsis,
             });
-        } else {
-            ui.text(c, "Replies stream to stdout, HTTP MCP (`wait_for_feedback` / `read_feedback`), and `.nanoui/shelf/inbox.jsonl`", .{
-                .size = 11,
+        } else if (!compact) {
+            ui.text(c, "Routes live to Harness chats/agents (`ws://127.0.0.1:27664`, no login needed) + MCP + `inbox.jsonl`", .{
+                .size = 10.5,
                 .color = pal.muted,
                 .truncate = .ellipsis,
             });
@@ -378,9 +388,15 @@ pub const EditorState = struct {
             self.last_feedback_msg_len = n;
             self.sent_count += 1;
             appendInboxEx(self.gpa, self.io, shelf.root_dir, doc_name, st, msg, was_dirty, self.emit_stdout);
+            const routed_harness = self.harness.sendFeedback(shelf.root_dir, doc_name, st, msg, was_dirty);
             self.reply_buf.clear();
             self.last_feedback_status = st;
-            on_toast.* = if (std.mem.eql(u8, st, "approved")) "✓ Sent Approval" else "✓ Sent to Agent Inbox";
+            on_toast.* = if (routed_harness)
+                "✓ Sent to Harness + Agent Inbox"
+            else if (std.mem.eql(u8, st, "approved"))
+                "✓ Sent Approval"
+            else
+                "✓ Sent to Agent Inbox";
             c.changed = true;
         }
     }

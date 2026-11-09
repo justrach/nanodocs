@@ -80,6 +80,8 @@ pub fn main(init: std.process.Init) !void {
     var is_inbox_cmd: bool = false;
     var is_wait_cmd: bool = false;
     var is_reply_cmd: bool = false;
+    var is_harness_cmd: bool = false;
+    var harness_sub: []const u8 = "status";
     var mcp_use_http: bool = false;
     var no_mcp_bg: bool = false;
     var has_snapshot_flag: bool = false;
@@ -173,6 +175,14 @@ pub fn main(init: std.process.Init) !void {
             is_reply_cmd = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "harness") or std.mem.eql(u8, arg, "--harness")) {
+            is_harness_cmd = true;
+            continue;
+        }
+        if (is_harness_cmd and (std.mem.eql(u8, arg, "status") or std.mem.eql(u8, arg, "connect") or std.mem.eql(u8, arg, "send"))) {
+            harness_sub = arg;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--doc")) {
             if (args.next()) |d| reply_doc = d;
             continue;
@@ -238,6 +248,45 @@ pub fn main(init: std.process.Init) !void {
         const ack = try std.fmt.allocPrint(init.gpa, "{{\"ok\":true,\"doc\":\"{s}\",\"status\":\"{s}\"}}\n", .{ reply_doc, reply_status });
         defer init.gpa.free(ack);
         _ = std.Io.File.stdout().writeStreamingAll(init.io, ack) catch {};
+        return;
+    }
+
+    if (is_harness_cmd) {
+        var br = editor_mod.harness_bridge.Bridge.init(init.gpa, init.io);
+        defer br.deinit();
+        if (std.mem.eql(u8, harness_sub, "connect")) {
+            br.connectAll(".", mcp_port_override orelse 7740);
+        } else if (std.mem.eql(u8, harness_sub, "send")) {
+            br.refresh(".");
+            const sent = br.sendFeedback(".", reply_doc, reply_status, if (reply_msg.len > 0) reply_msg else "Sent via nanodocs harness bridge", false);
+            const out = try std.fmt.allocPrint(init.gpa, "{{\"ok\":{},\"route\":\"{s}\"}}\n", .{ sent, br.lastRouteText() });
+            defer init.gpa.free(out);
+            _ = std.Io.File.stdout().writeStreamingAll(init.io, out) catch {};
+            return;
+        } else {
+            br.refresh(".");
+        }
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(init.gpa);
+        const hdr = try std.fmt.allocPrint(
+            init.gpa,
+            "{{\"connected\":{},\"port\":{d},\"auth_mode\":\"{s}\",\"mcp_wired\":{},\"targets\":[",
+            .{ br.connected, br.port, br.auth_mode, br.mcp_wired },
+        );
+        defer init.gpa.free(hdr);
+        try out.appendSlice(init.gpa, hdr);
+        for (br.targets.items, 0..) |t, i| {
+            if (i > 0) try out.append(init.gpa, ',');
+            const row = try std.fmt.allocPrint(
+                init.gpa,
+                "{{\"kind\":\"{s}\",\"id\":\"{s}\",\"label\":\"{s}\",\"harness\":\"{s}\",\"busy\":{}}}",
+                .{ @tagName(t.kind), t.id, t.label, t.harness, t.busy },
+            );
+            defer init.gpa.free(row);
+            try out.appendSlice(init.gpa, row);
+        }
+        try out.appendSlice(init.gpa, "]}\n");
+        _ = std.Io.File.stdout().writeStreamingAll(init.io, out.items) catch {};
         return;
     }
 

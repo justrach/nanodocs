@@ -260,6 +260,31 @@ pub const Server = struct {
             return writeToolResult(a, out, id, is_modern, ack, false);
         }
 
+        if (std.mem.eql(u8, name, "harness_bridge")) {
+            const action = string(args, "action") orelse "status";
+            var br = editor_mod.harness_bridge.Bridge.init(a, self.io);
+            defer br.deinit();
+            if (std.mem.eql(u8, action, "connect")) {
+                br.connectAll(".", 7740);
+            } else if (std.mem.eql(u8, action, "send")) {
+                br.refresh(".");
+                const doc_name = string(args, "doc") orelse "untitled.md";
+                const st = string(args, "status") orelse "comment";
+                const msg = string(args, "message") orelse "Forwarded from nanodocs";
+                const ok = br.sendFeedback(".", doc_name, st, msg, false);
+                const summary = try std.fmt.allocPrint(a, "{{\"ok\":{},\"route\":\"{s}\"}}", .{ ok, br.lastRouteText() });
+                return writeToolResult(a, out, id, is_modern, summary, !ok);
+            } else {
+                br.refresh(".");
+            }
+            const summary = try std.fmt.allocPrint(
+                a,
+                "Harness Bridge: connected={} (port {d}, mode=\"{s}\", mcp_wired={}, targets={d})",
+                .{ br.connected, br.port, br.auth_mode, br.mcp_wired, br.targets.items.len },
+            );
+            return writeToolResult(a, out, id, is_modern, summary, false);
+        }
+
         return failure(out, id, -32602, "Unknown tool");
     }
 };
@@ -329,7 +354,8 @@ pub fn writeToolsList(w: *Io.Writer) !void {
         \\{"name":"read_document","title":"Read Document from Shelf","description":"Reads the source of a document in .nanoui/shelf/ or the workspace by name or path (including live user edits saved in nanodocs).","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Document filename or path"}},"required":["name"]},"annotations":{"readOnlyHint":true}},
         \\{"name":"read_feedback","title":"Read Human Feedback & Approvals","description":"Reads all human replies, approvals (approved / changes_requested / comment), and edit flags from .nanoui/shelf/inbox.jsonl.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true}},
         \\{"name":"wait_for_feedback","title":"Wait for Human Reply or Approval in nanodocs","description":"Lights up the `AGENT WAITING FOR REPLY` indicator in nanodocs and blocks until the human clicks `Send ↵`, `✎ Request Changes`, or `✓ Approve Plan` in the nanodocs GUI window, returning their exact JSONL reply and edit status.","inputSchema":{"type":"object","properties":{"timeout_ms":{"type":"integer","description":"Maximum time to wait in milliseconds (default 120000)"}}},"annotations":{"readOnlyHint":true}},
-        \\{"name":"post_feedback","title":"Post Feedback Entry to Inbox","description":"Appends a structured feedback or question entry to .nanoui/shelf/inbox.jsonl.","inputSchema":{"type":"object","properties":{"doc":{"type":"string","description":"Target document filename"},"status":{"type":"string","description":"approved, changes_requested, or comment"},"message":{"type":"string","description":"Feedback or question text"}},"required":["message"]},"annotations":{"readOnlyHint":false}}
+        \\{"name":"post_feedback","title":"Post Feedback Entry to Inbox","description":"Appends a structured feedback or question entry to .nanoui/shelf/inbox.jsonl.","inputSchema":{"type":"object","properties":{"doc":{"type":"string","description":"Target document filename"},"status":{"type":"string","description":"approved, changes_requested, or comment"},"message":{"type":"string","description":"Feedback or question text"}},"required":["message"]},"annotations":{"readOnlyHint":false}},
+        \\{"name":"harness_bridge","title":"Connect or Route via Local Harness Bridge","description":"Intertwines nanodocs with the local Harness engine (`ws://127.0.0.1:27664`) and local agent CLIs (works in local no-login mode or synced mode). Actions: `status` (list active chats & local agents), `connect` (wire .mcp.json, start `harness headless` if needed, reconnect MCP), `send` (push a review/message directly into the active Harness chat or spawn a local agent chat).","inputSchema":{"type":"object","properties":{"action":{"type":"string","description":"status, connect, or send"},"doc":{"type":"string","description":"Document filename"},"status":{"type":"string","description":"approved, changes_requested, or comment"},"message":{"type":"string","description":"Message to send into Harness"}},"required":["action"]},"annotations":{"readOnlyHint":false}}
         \\]}
     );
 }

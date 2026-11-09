@@ -143,6 +143,7 @@ pub const EditorState = struct {
         width: f32,
         on_toast: *[]const u8,
     ) void {
+        c.theme = if (pal.sidebar.r < 0.5) ui.Theme.dark_theme else ui.Theme.light;
         const is_html = if (shelf.entries.items.len > 0)
             shelf.entries.items[@min(selected, shelf.entries.items.len - 1)].is_html
         else
@@ -255,6 +256,7 @@ pub const EditorState = struct {
         on_toast: *[]const u8,
     ) void {
         const compact = pane_w < 760;
+        c.theme = if (pal.sidebar.r < 0.5) ui.Theme.dark_theme else ui.Theme.light;
         ui.column(c, .{
             .width = .fill,
             .padding = .{ .top = 6, .bottom = 9, .left = if (compact) 12 else 20, .right = if (compact) 12 else 20 },
@@ -329,7 +331,7 @@ pub const EditorState = struct {
         else
             "untitled.md";
 
-        const field_w = @max(pane_w - (if (compact) @as(f32, 230) else 340), 140);
+        const field_w = @max(pane_w - (if (compact) @as(f32, 245) else 375), 140);
         ui.key(c, "agent-reply-input");
         const rep = ui.textField(c, &self.reply_buf, .{
             .width = .{ .px = field_w },

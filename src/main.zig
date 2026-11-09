@@ -16,6 +16,7 @@ const AppState = @import("app.zig").AppState;
 const shelf_mod = @import("shelf.zig");
 const mcp = @import("mcp.zig");
 const mcp_http = @import("mcp_http.zig");
+const editor_mod = @import("editor.zig");
 
 const agent_help_text =
     \\nanodocs — Agent-First Visual Markdown, HTML & Native GPU Mermaid Studio + MCP
@@ -72,9 +73,12 @@ pub fn main(init: std.process.Init) !void {
     var explicit_file: ?[]const u8 = null;
     var save_to_shelf: bool = false;
     var dark_start: bool = false;
+    var split_start: bool = false;
     var is_show_cmd: bool = false;
     var is_mcp_cmd: bool = false;
     var is_mcp_config: bool = false;
+    var is_inbox_cmd: bool = false;
+    var is_reply_cmd: bool = false;
     var mcp_use_http: bool = false;
     var no_mcp_bg: bool = false;
     var has_snapshot_flag: bool = false;
@@ -84,6 +88,9 @@ pub fn main(init: std.process.Init) !void {
     var title_arg: []const u8 = "Agent Walkthrough";
     var inline_md: ?[]const u8 = null;
     var inline_html: ?[]const u8 = null;
+    var reply_doc: []const u8 = "untitled.md";
+    var reply_status: []const u8 = "comment";
+    var reply_msg: []const u8 = "";
 
     var args = try init.minimal.args.iterateAllocator(init.gpa);
     defer args.deinit();
@@ -153,6 +160,30 @@ pub fn main(init: std.process.Init) !void {
             is_show_cmd = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "inbox")) {
+            is_inbox_cmd = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "reply")) {
+            is_reply_cmd = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--doc")) {
+            if (args.next()) |d| reply_doc = d;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--status")) {
+            if (args.next()) |s| reply_status = s;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--message")) {
+            if (args.next()) |m| reply_msg = m;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--split")) {
+            split_start = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--no-open")) {
             no_open = true;
             continue;
@@ -178,6 +209,21 @@ pub fn main(init: std.process.Init) !void {
             continue;
         }
         explicit_file = arg;
+    }
+
+    if (is_inbox_cmd) {
+        const inbox = editor_mod.readInboxAlloc(init.gpa, init.io, ".");
+        defer init.gpa.free(inbox);
+        _ = std.Io.File.stdout().writeStreamingAll(init.io, inbox) catch {};
+        return;
+    }
+
+    if (is_reply_cmd) {
+        editor_mod.appendInbox(init.gpa, init.io, ".", reply_doc, reply_status, reply_msg, false);
+        const ack = try std.fmt.allocPrint(init.gpa, "{{\"ok\":true,\"doc\":\"{s}\",\"status\":\"{s}\"}}\n", .{ reply_doc, reply_status });
+        defer init.gpa.free(ack);
+        _ = std.Io.File.stdout().writeStreamingAll(init.io, ack) catch {};
+        return;
     }
 
     if (is_mcp_cmd) {
@@ -260,6 +306,7 @@ pub fn main(init: std.process.Init) !void {
     var state = AppState.init(init.gpa, init.io, explicit_file);
     defer state.deinit();
     if (dark_start) state.mode = .dark;
+    if (split_start) state.view_mode = .split;
 
     if (save_to_shelf) {
         if (explicit_file) |f| {

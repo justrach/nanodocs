@@ -11,6 +11,8 @@ const Value = std.json.Value;
 const md = @import("markdown.zig");
 const mm = @import("mermaid.zig");
 const shelf_mod = @import("shelf.zig");
+const editor_mod = @import("editor.zig");
+const AppState = @import("app.zig").AppState;
 
 pub const modern_version = "2026-07-28";
 pub const supported_versions = [_][]const u8{
@@ -145,6 +147,14 @@ pub const Server = struct {
             for (doc.blocks) |b| if (b == .mermaid) {
                 mermaid_count += 1;
             };
+            if (string(args, "mode")) |mode_str| {
+                if (std.mem.eql(u8, mode_str, "split")) {
+                    if (self.on_show_ctx) |ctx| {
+                        const st: *AppState = @ptrCast(@alignCast(ctx));
+                        st.mcp_want_split.store(true, .release);
+                    }
+                }
+            }
             if (self.on_show) |cb| cb(self.on_show_ctx, saved_path);
             const summary = try std.fmt.allocPrint(
                 a,
@@ -219,6 +229,21 @@ pub const Server = struct {
             return writeToolResult(a, out, id, is_modern, "Document not found in shelf or workspace.", true);
         }
 
+        if (std.mem.eql(u8, name, "read_feedback")) {
+            const inbox = editor_mod.readInboxAlloc(a, self.io, ".");
+            const msg = if (inbox.len > 0) inbox else "No human feedback entries in `.nanoui/shelf/inbox.jsonl` yet.";
+            return writeToolResult(a, out, id, is_modern, msg, false);
+        }
+
+        if (std.mem.eql(u8, name, "post_feedback")) {
+            const doc_name = string(args, "doc") orelse "untitled.md";
+            const status = string(args, "status") orelse "comment";
+            const message = string(args, "message") orelse return failure(out, id, -32602, "`message` is required");
+            editor_mod.appendInbox(a, self.io, ".", doc_name, status, message, false);
+            const ack = try std.fmt.allocPrint(a, "Recorded `{s}` on `{s}` in `.nanoui/shelf/inbox.jsonl`.", .{ status, doc_name });
+            return writeToolResult(a, out, id, is_modern, ack, false);
+        }
+
         return failure(out, id, -32602, "Unknown tool");
     }
 };
@@ -282,10 +307,12 @@ fn writeDiscover(w: *Io.Writer) !void {
 pub fn writeToolsList(w: *Io.Writer) !void {
     try w.writeAll(
         \\{"tools":[
-        \\{"name":"show_document","title":"Show Markdown or HTML in nanodocs","description":"Saves a Markdown (.md) or HTML (.html) walkthrough (with native 120Hz GPU Mermaid diagrams, tables, and callouts) into .nanoui/shelf/ and displays it in nanodocs.","inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"Document title"},"markdown":{"type":"string","description":"Markdown body (supports ```mermaid blocks: flowchart, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, pie)"},"html":{"type":"string","description":"Standalone HTML body (supports <pre class=\"mermaid\">)"}},"required":["title"]},"annotations":{"readOnlyHint":false}},
+        \\{"name":"show_document","title":"Show Markdown or HTML in nanodocs","description":"Saves a Markdown (.md) or HTML (.html) walkthrough (with native 120Hz GPU Mermaid diagrams, tables, and callouts) into .nanoui/shelf/ and displays it in nanodocs. Pass mode=\"split\" to open the live Markdown/Mermaid editor side-by-side with the GPU preview.","inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"Document title"},"markdown":{"type":"string","description":"Markdown body (supports ```mermaid blocks: flowchart, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, pie)"},"html":{"type":"string","description":"Standalone HTML body (supports <pre class=\"mermaid\">)"},"mode":{"type":"string","description":"Optional view mode: rendered, split, or source"}},"required":["title"]},"annotations":{"readOnlyHint":false}},
         \\{"name":"render_mermaid","title":"Render Native GPU Mermaid Diagram","description":"Pre-parses and renders a Mermaid diagram (flowchart TD/LR, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, pie) natively on the GPU in nanodocs with 0ms per-frame parsing.","inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"Diagram title"},"diagram":{"type":"string","description":"Mermaid diagram source (e.g. flowchart LR, sequenceDiagram, stateDiagram-v2, pie)"},"explanation":{"type":"string","description":"Optional Markdown explanation accompanying the diagram"}},"required":["diagram"]},"annotations":{"readOnlyHint":false}},
         \\{"name":"list_shelf","title":"List Agent Shelf Documents","description":"Lists all Markdown and HTML artifacts in .nanoui/shelf/ and workspace documents.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true}},
-        \\{"name":"read_document","title":"Read Document from Shelf","description":"Reads the source of a document in .nanoui/shelf/ or the workspace by name or path.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Document filename or path"}},"required":["name"]},"annotations":{"readOnlyHint":true}}
+        \\{"name":"read_document","title":"Read Document from Shelf","description":"Reads the source of a document in .nanoui/shelf/ or the workspace by name or path (including live user edits saved in nanodocs).","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Document filename or path"}},"required":["name"]},"annotations":{"readOnlyHint":true}},
+        \\{"name":"read_feedback","title":"Read Human Feedback & Approvals","description":"Reads all human replies, approvals (approved / changes_requested / comment), and edit flags from .nanoui/shelf/inbox.jsonl.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true}},
+        \\{"name":"post_feedback","title":"Post Feedback Entry to Inbox","description":"Appends a structured feedback or question entry to .nanoui/shelf/inbox.jsonl.","inputSchema":{"type":"object","properties":{"doc":{"type":"string","description":"Target document filename"},"status":{"type":"string","description":"approved, changes_requested, or comment"},"message":{"type":"string","description":"Feedback or question text"}},"required":["message"]},"annotations":{"readOnlyHint":false}}
         \\]}
     );
 }

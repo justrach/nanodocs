@@ -168,6 +168,15 @@ test "nanodocs UI renders Mermaid diagrams offscreen in Tester and switches mode
     const gpu_rect = t.findText("120Hz Metal GPU Frame") orelse return error.TextNotFound;
     try testing.expect(gpu_rect.x >= 196);
     try testing.expect(gpu_rect.x + gpu_rect.w <= 680);
+
+    // Switch to Split Edit mode and insert a live Mermaid flowchart
+    t.resize(1120, 760);
+    try t.clickText("Rendered");
+    try testing.expectEqual(@import("editor.zig").ViewMode.split, state.view_mode);
+    try testing.expect(t.containsText("LIVE EDITOR"));
+    try t.clickText("+ Flowchart");
+    try testing.expect(state.editor.dirty);
+    try testing.expect(state.editor.live_doc != null);
 }
 
 test "MCP server: legacy initialize, stateless 2026-07-28 discover, tools/list and render_mermaid" {
@@ -194,6 +203,8 @@ test "MCP server: legacy initialize, stateless 2026-07-28 discover, tools/list a
     try srv.handle(a, &out3.writer, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}");
     try testing.expect(std.mem.indexOf(u8, out3.written(), "\"render_mermaid\"") != null);
     try testing.expect(std.mem.indexOf(u8, out3.written(), "\"show_document\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out3.written(), "\"read_feedback\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out3.written(), "\"post_feedback\"") != null);
 
     // 4. tools/call render_mermaid
     var out4: std.Io.Writer.Allocating = .init(a);

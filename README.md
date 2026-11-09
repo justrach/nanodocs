@@ -7,7 +7,13 @@ A native Markdown (`.md`), HTML (`.html`), and **Mermaid** studio + agent artifa
 - **Streamable HTTP & Stdio MCP Server (`http://127.0.0.1:7740/mcp` & `nanodocs mcp`)**:
   - Modeled after Codegraff's MCP server (`mcp_server.zig` / `mcp_server_http.zig` / `mcp_server_modern.zig`), supporting both **stateless `2026-07-28` MCP** (`params._meta`, `server/discover`, `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` header validation) and **session-based `2025-11-25` / `2025-06-18` / `2025-03-26` / `2024-11-05` MCP** (`initialize`, `Mcp-Session-Id`, `DELETE /mcp`).
   - Runs automatically in the background on `http://127.0.0.1:7740/mcp` whenever the `nanodocs` GUI window is open, and wakes the live window via `dispatchMain` as soon as an agent calls `show_document` or `render_mermaid`.
-  - Exposes 4 tools: `show_document`, `render_mermaid`, `list_shelf`, and `read_document`.
+  - Exposes 6 tools: `show_document` (supports `"mode": "split"`), `render_mermaid`, `list_shelf`, `read_document`, `read_feedback`, and `post_feedback`.
+- **Live Markdown + Mermaid Split Editor (`Rendered` | `Split Edit` | `Source`, `⌘E` / `⌘S`)**:
+  - Edit Markdown or ```` ```mermaid ```` source side-by-side with the 120 Hz Metal preview (`Split Edit`), which re-parses the AST in ~10 µs on every keystroke so diagrams re-layout live as you type.
+  - One-click toolbar buttons (`+ Flowchart`, `+ Sequence`, `+ Callout`, `Save ⌘S`) write changes back to disk or `.nanoui/shelf/`.
+- **Bidirectional Human ↔ Agent Inbox (`.nanoui/shelf/inbox.jsonl`)**:
+  - Bottom composer bar lets you type feedback or click **`✓ Approve Plan`** / **`✎ Request Changes`** / **`Send ↵`**.
+  - Agents read human approvals, change requests, and live document edits headlessly via the `read_feedback` MCP tool or `nanodocs inbox`.
 - **Ultra-Fast Native GPU Mermaid Renderer (0 ms per-frame parse)**: Pre-parses ```` ```mermaid ```` blocks (and `<pre class="mermaid">` in `.html`) into typed ASTs at load time and lays them out natively on the GPU:
   - `flowchart` / `graph` (`TD`, `LR`, `BT`, `RL`) with ranked Sugiyama layout, barycenter ordering, back-edge routing, and shapes (`rect`, `round`, `stadium`, `circle`, `diamond`, `hexagon`, `cylinder`, `subroutine`, `flag`).
   - `sequenceDiagram` with participants, actors, lifelines, solid/dashed arrows, self-loops, `Note over/left of/right of`, and `loop`/`alt`/`opt` sections.
@@ -51,6 +57,13 @@ nanodocs mcp --http --port 7740
 ```sh
 # Show a visual walkthrough + Mermaid diagram to the user (writes to .nanoui/shelf/):
 nanodocs show --title "Architecture Plan" --markdown $'```mermaid\nflowchart LR\n  Agent([Agent]) --> GPU[[120Hz Metal]]\n```'
+
+# Open a document directly in Split Edit mode (Live Editor + 120Hz GPU Preview):
+nanodocs README.md --split
+
+# Headless Agent <-> Human Feedback Inbox (.nanoui/shelf/inbox.jsonl):
+nanodocs reply --doc "architecture-plan.md" --status approved --message "LGTM, ship the 3-tier cache"
+nanodocs inbox
 
 # Machine-readable shelf index & agent help:
 nanodocs --agent-help

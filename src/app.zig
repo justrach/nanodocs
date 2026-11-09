@@ -8,16 +8,18 @@ const ui = nanoui.ui;
 const md = @import("markdown.zig");
 const shelf_mod = @import("shelf.zig");
 const render = @import("render.zig");
+const editor_mod = @import("editor.zig");
 
 pub const AppState = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
     shelf: shelf_mod.Shelf,
+    editor: editor_mod.EditorState,
     images: render.ImageCache = .{},
     selected: usize = 0,
     mode: render.CanvasMode = .paper,
+    view_mode: editor_mod.ViewMode = .rendered,
     show_sidebar: bool = true,
-    show_raw: bool = false,
     show_env_panel: bool = false,
     show_mcp_panel: bool = false,
     was_resizing: bool = false,
@@ -26,6 +28,7 @@ pub const AppState = struct {
     window: ?*nanoui.Window = null,
     mcp_listening: std.atomic.Value(bool) = .init(false),
     mcp_dirty: std.atomic.Value(bool) = .init(false),
+    mcp_want_split: std.atomic.Value(bool) = .init(false),
     mcp_calls: std.atomic.Value(u64) = .init(0),
     last_mcp_name_buf: [128]u8 = undefined,
     last_mcp_name_len: usize = 0,
@@ -35,6 +38,7 @@ pub const AppState = struct {
             .gpa = gpa,
             .io = io,
             .shelf = .init(gpa, io),
+            .editor = .init(gpa, io),
             .explicit_file = explicit_file,
         };
         s.shelf.reload(explicit_file);
@@ -42,21 +46,17 @@ pub const AppState = struct {
     }
 
     pub fn deinit(self: *AppState) void {
+        self.editor.deinit();
         self.images.deinit(self.gpa);
         self.shelf.deinit();
     }
 
     pub fn view(self: *AppState, c: *ui.Context) void {
-        // Live-resize lesson from nanoterm: while the window is inside a
-        // WindowServer resize transaction (`c.live_resizing`), keep the frame
-        // lightweight; once the drag ends, rebuild once to settle assets.
         if (self.was_resizing and !c.live_resizing) {
             c.changed = true;
         }
         self.was_resizing = c.live_resizing;
 
-        // Zero-syscall frame path: only reload `.nanoui/shelf/` when an incoming
-        // MCP call marks `mcp_dirty` (or the user presses Cmd+R).
         if (!c.live_resizing and self.mcp_dirty.swap(false, .acquire)) {
             self.shelf.reload(self.explicit_file);
             const target = self.last_mcp_name_buf[0..self.last_mcp_name_len];
@@ -65,15 +65,18 @@ pub const AppState = struct {
                 for (self.shelf.entries.items, 0..) |ent, i| {
                     if (std.mem.eql(u8, ent.name, target)) {
                         self.selected = i;
+                        self.editor.forceReload(i, ent);
                         break;
                     }
                 }
                 self.status_toast = "⚡ Live from Agent MCP";
             }
+            if (self.mcp_want_split.swap(false, .acquire)) {
+                self.view_mode = .split;
+            }
             c.changed = true;
         }
 
-        // Keyboard shortcuts
         if (c.shortcut(.{ .key = 't', .cmd = true })) {
             self.mode = switch (self.mode) {
                 .paper => .dark,
@@ -82,11 +85,20 @@ pub const AppState = struct {
             };
         }
         if (c.shortcut(.{ .key = 'b', .cmd = true })) self.show_sidebar = !self.show_sidebar;
-        if (c.shortcut(.{ .key = 'e', .cmd = true })) self.show_raw = !self.show_raw;
+        if (c.shortcut(.{ .key = 'e', .cmd = true })) self.view_mode = self.view_mode.next();
         if (c.shortcut(.{ .key = 'd', .cmd = true })) self.show_env_panel = !self.show_env_panel;
         if (c.shortcut(.{ .key = 'm', .cmd = true })) self.show_mcp_panel = !self.show_mcp_panel;
+        if (c.shortcut(.{ .key = 's', .cmd = true })) {
+            if (self.editor.saveCurrent(&self.shelf, self.selected)) |_| {
+                self.status_toast = "✓ Saved edits";
+            }
+        }
         if (c.shortcut(.{ .key = 'r', .cmd = true }) and !c.live_resizing) {
             self.shelf.reload(self.explicit_file);
+            if (self.shelf.entries.items.len > 0) {
+                const idx = @min(self.selected, self.shelf.entries.items.len - 1);
+                self.editor.forceReload(idx, self.shelf.entries.items[idx]);
+            }
         }
         inline for (0..9) |i| {
             if (c.shortcut(.{ .key = '1' + i, .cmd = true })) {
@@ -97,7 +109,6 @@ pub const AppState = struct {
         const pal = render.Palette.forMode(self.mode);
         const sidebar_w: f32 = if (!self.show_sidebar) 0 else if (c.size.w < 860) 196 else 248;
         const pane_w: f32 = @max(c.size.w - sidebar_w, 240);
-        const content_width: f32 = @min(@max(pane_w - 48, 200), 700);
 
         ui.row(c, .{
             .width = .fill,
@@ -137,26 +148,60 @@ pub const AppState = struct {
 
         const idx = @min(self.selected, self.shelf.entries.items.len - 1);
         const active = self.shelf.entries.items[idx];
+        self.editor.syncDocument(idx, active);
+        const live_doc = self.editor.activeDoc(active.doc);
+        const live_raw = self.editor.activeRaw(active.raw);
 
-        ui.scroll(c, .{
-            .width = .fill,
-            .grow = 1,
-        });
-        defer ui.end(c);
+        switch (self.view_mode) {
+            .rendered => {
+                const content_width: f32 = @min(@max(pane_w - 48, 200), 700);
+                ui.scroll(c, .{ .width = .fill, .grow = 1 });
+                render.renderDocument(
+                    c,
+                    live_doc,
+                    live_raw,
+                    false,
+                    pal,
+                    &self.images,
+                    self.gpa,
+                    self.io,
+                    self.shelf.root_dir,
+                    c.live_resizing,
+                    content_width,
+                );
+                ui.end(c);
+            },
+            .source => {
+                self.editor.renderEditorPane(c, pal, &self.shelf, idx, pane_w, &self.status_toast);
+            },
+            .split => {
+                const ed_w = @floor(pane_w * 0.45);
+                const prev_w = @max(pane_w - ed_w, 200);
+                const content_width: f32 = @min(@max(prev_w - 36, 180), 680);
+                ui.row(c, .{ .width = .fill, .grow = 1 });
+                self.editor.renderEditorPane(c, pal, &self.shelf, idx, ed_w, &self.status_toast);
+                ui.column(c, .{ .width = .{ .px = prev_w }, .height = .fill });
+                ui.scroll(c, .{ .width = .fill, .grow = 1 });
+                render.renderDocument(
+                    c,
+                    live_doc,
+                    live_raw,
+                    false,
+                    pal,
+                    &self.images,
+                    self.gpa,
+                    self.io,
+                    self.shelf.root_dir,
+                    c.live_resizing,
+                    content_width,
+                );
+                ui.end(c);
+                ui.end(c);
+                ui.end(c);
+            },
+        }
 
-        render.renderDocument(
-            c,
-            active.doc,
-            active.raw,
-            self.show_raw,
-            pal,
-            &self.images,
-            self.gpa,
-            self.io,
-            self.shelf.root_dir,
-            c.live_resizing,
-            content_width,
-        );
+        self.editor.renderAgentCommsBar(c, pal, &self.shelf, idx, pane_w, &self.status_toast);
     }
 
     fn renderSidebar(self: *AppState, c: *ui.Context, pal: render.Palette, sidebar_w: f32) void {
@@ -319,7 +364,7 @@ pub const AppState = struct {
 
         ui.spacer(c);
 
-        // Right Liquid Glass capsule: Rendered/Source, Paper/Light/Dark, Pin to Shelf, MCP, Discord .env
+        // Right Liquid Glass capsule: Rendered/Split/Source, Paper/Light/Dark, Pin to Shelf, MCP, Discord .env
         {
             const right = render.glassPill(c, pal);
             defer right.end();
@@ -328,12 +373,12 @@ pub const AppState = struct {
             const raw_btn = ui.pressable(c, .{
                 .padding = .{ .left = btn_pad, .right = btn_pad, .top = 3, .bottom = 3 },
                 .radius = 999,
-                .background = if (self.show_raw) pal.code_bg else .transparent,
+                .background = if (self.view_mode != .rendered) pal.code_bg else .transparent,
             }, pal.code_bg);
-            ui.text(c, if (self.show_raw) "Source" else "Rendered", .{ .size = 11.5, .weight = .medium, .color = pal.ink });
+            ui.text(c, self.view_mode.label(), .{ .size = 11.5, .weight = .medium, .color = pal.ink });
             ui.end(c);
             if (raw_btn.clicked) {
-                self.show_raw = !self.show_raw;
+                self.view_mode = self.view_mode.next();
                 c.changed = true;
             }
 

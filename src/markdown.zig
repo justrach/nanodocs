@@ -121,7 +121,7 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
                 const dt = std.mem.trim(u8, dl, " \t\r");
                 if (std.mem.startsWith(u8, dt, "</details>")) break;
                 if (extractTag(dt, "summary")) |s| {
-                    summary = cleanHtmlInline(a, s);
+                    summary = stripInline(a, cleanHtmlInline(a, s));
                 } else {
                     inner.appendSlice(a, dl) catch {};
                     inner.append(a, '\n') catch {};
@@ -134,7 +134,7 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
         if (std.mem.startsWith(u8, trimmed, "<h1") or std.mem.startsWith(u8, trimmed, "<h2") or std.mem.startsWith(u8, trimmed, "<h3")) {
             const lvl: u8 = trimmed[2] - '0';
             const centered = std.mem.indexOf(u8, trimmed, "center") != null;
-            const txt = cleanHtmlInline(a, trimmed);
+            const txt = stripInline(a, cleanHtmlInline(a, trimmed));
             if (txt.len > 0) out.append(a, .{ .heading = .{ .level = lvl, .text = txt, .centered = centered } }) catch {};
             continue;
         }
@@ -161,7 +161,7 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
             var lvl: u8 = 0;
             while (lvl < trimmed.len and lvl < 4 and trimmed[lvl] == '#') lvl += 1;
             if (lvl < trimmed.len and trimmed[lvl] == ' ') {
-                out.append(a, .{ .heading = .{ .level = lvl, .text = cleanHtmlInline(a, std.mem.trim(u8, trimmed[lvl + 1 ..], " ")) } }) catch {};
+                out.append(a, .{ .heading = .{ .level = lvl, .text = stripInline(a, cleanHtmlInline(a, std.mem.trim(u8, trimmed[lvl + 1 ..], " "))) } }) catch {};
                 continue;
             }
         }
@@ -214,7 +214,9 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
         }
 
         if (trimmed[0] == '|' and std.mem.count(u8, trimmed, "|") >= 2) {
-            const headers = splitTableRow(a, trimmed);
+            const raw_headers = splitTableRow(a, trimmed);
+            var headers: std.ArrayList([]const u8) = .empty;
+            for (raw_headers) |rh| headers.append(a, stripInline(a, rh)) catch {};
             var rows: std.ArrayList([]const Cell) = .empty;
             while (lines.peek()) |peek_raw| {
                 const pt = std.mem.trim(u8, peek_raw, " \t\r");
@@ -226,7 +228,7 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
                 for (cols) |c_txt| cells.append(a, .{ .text = c_txt }) catch {};
                 rows.append(a, cells.items) catch {};
             }
-            out.append(a, .{ .table = .{ .headers = headers, .rows = rows.items } }) catch {};
+            out.append(a, .{ .table = .{ .headers = headers.items, .rows = rows.items } }) catch {};
             continue;
         }
 

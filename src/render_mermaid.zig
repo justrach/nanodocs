@@ -1,7 +1,8 @@
 //! Native GPU Mermaid renderer for `nanodocs`.
 //!
 //! Renders pre-parsed `mermaid.Diagram` ASTs (`flow`, `seq`, `pie`) directly to
-//! `nanoui` GPU primitives with zero per-frame string parsing.
+//! `nanoui` GPU primitives with zero per-frame string parsing, zero per-frame
+//! DFS/cycle-breaking, and zero per-frame sorting.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -85,8 +86,8 @@ pub fn line(c: *ui.Context, x0: f32, y0: f32, x1: f32, y1: f32, kind: mm.Line, c
         return;
     }
     var p = a;
-    while (p < b) : (p += 7) {
-        const len = @min(4, b - p);
+    while (p < b) : (p += 10) {
+        const len = @min(5, b - p);
         if (horizontal) rect(c, p, y0 - t / 2, len, t, color, 0) else rect(c, x0 - t / 2, p, t, len, color, 0);
     }
 }
@@ -107,7 +108,7 @@ pub fn arrow(c: *ui.Context, x: f32, y: f32, dir: mm.Dir, color: ui.Color) void 
 }
 
 fn strips(c: *ui.Context, x: f32, y: f32, w: f32, h: f32, fill: ui.Color, edge: ui.Color, comptime half: fn (f32) f32) void {
-    const step: f32 = 0.5;
+    const step: f32 = 1.5;
     var row: f32 = 0;
     while (row < h) : (row += step) {
         const hw = half((row + step / 2) / h) * w / 2;
@@ -128,7 +129,7 @@ fn hexagonHalf(t: f32) f32 {
     return @min(1, 0.72 + 0.28 * (1 - @abs(2 * t - 1)) / 0.5);
 }
 
-const Box = struct { x: f32 = 0, y: f32 = 0, w: f32, h: f32, rank: usize = 0, order: f32 = 0, r0: f32 = 0, r1: f32 = 0, lab: f32 = 0 };
+const Box = struct { x: f32 = 0, y: f32 = 0, w: f32, h: f32, rank: usize = 0, r0: f32 = 0, r1: f32 = 0, lab: f32 = 0 };
 
 const Pass = enum { lines, labels };
 const label_room: f32 = 20;
@@ -139,26 +140,25 @@ fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
     const a = c.alloc();
     const n = f.nodes.len;
     const boxes = a.alloc(Box, n) catch return;
-    for (f.nodes, boxes) |node, *b| {
+    for (f.nodes, boxes, 0..) |node, *b, i| {
         const sz = measure(c, node.label, label_style);
+        const r = if (i < f.ranks.len) f.ranks[i] else 0;
         b.* = switch (node.shape) {
-            .start, .end => .{ .w = 16, .h = 16 },
+            .start, .end => .{ .w = 16, .h = 16, .rank = r },
             .circle => blk: {
                 const d = @max(sz[0], sz[1]) + 28;
-                break :blk .{ .w = d, .h = d };
+                break :blk .{ .w = d, .h = d, .rank = r };
             },
-            .diamond => .{ .w = sz[0] * 1.4 + 36, .h = sz[1] * 1.6 + 30 },
-            .hexagon => .{ .w = sz[0] + 48, .h = sz[1] + 22 },
-            else => .{ .w = sz[0] + 28, .h = sz[1] + 18 },
+            .diamond => .{ .w = sz[0] * 1.4 + 36, .h = sz[1] * 1.6 + 30, .rank = r },
+            .hexagon => .{ .w = sz[0] + 48, .h = sz[1] + 22, .rank = r },
+            else => .{ .w = sz[0] + 28, .h = sz[1] + 18, .rank = r },
         };
     }
-    const back = rank(a, f, boxes) catch return;
-    order(a, f, boxes, back) catch return;
     const labels = a.alloc([2]f32, f.edges.len) catch return;
     for (f.edges, labels) |e, *l| l.* = if (e.label.len == 0) .{ 0, 0 } else patch(measure(c, e.label, small_style));
 
     var dir = f.dir;
-    var size = place(a, dir, boxes, back, f.edges, labels) catch return;
+    var size = place(a, dir, f, boxes, labels) catch return;
     if (size[0] > room) {
         const turned: mm.Dir = switch (dir) {
             .down => .right,
@@ -166,11 +166,11 @@ fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
             .right => .down,
             .left => .up,
         };
-        const other = place(a, turned, boxes, back, f.edges, labels) catch return;
+        const other = place(a, turned, f, boxes, labels) catch return;
         if (other[0] < size[0]) {
             dir = turned;
             size = other;
-        } else _ = place(a, dir, boxes, back, f.edges, labels) catch return;
+        } else _ = place(a, dir, f, boxes, labels) catch return;
     }
     const k = std.math.clamp(room / size[0], min_scale, 1);
     for (boxes) |*b| {
@@ -196,7 +196,7 @@ fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
             if (e.from >= n or e.to >= n) continue;
             const s = boxes[e.from];
             const t = boxes[e.to];
-            if (back[i]) {
+            if (i < f.back.len and f.back[i]) {
                 back_k += 1;
                 backEdge(c, pass, dir, s, t, e, W, H, back_k, ink, pal, k);
             } else forwardEdge(c, pass, dir, s, t, e, ink, pal, k);
@@ -205,13 +205,12 @@ fn flow(c: *ui.Context, f: mm.Flow, room: f32, pal: render.Palette) void {
     }
 }
 
-fn place(a: std.mem.Allocator, dir: mm.Dir, boxes: []Box, back: []const bool, edges: []const mm.Edge, labels: []const [2]f32) ![2]f32 {
+fn place(a: std.mem.Allocator, dir: mm.Dir, f: mm.Flow, boxes: []Box, labels: []const [2]f32) ![2]f32 {
     const n = boxes.len;
     const vertical = dir == .down or dir == .up;
     const across_gap: f32 = 28;
     const along_gap: f32 = 54;
-    var ranks: usize = 0;
-    for (boxes) |b| ranks = @max(ranks, b.rank + 1);
+    const ranks = @max(f.num_ranks, 1);
     const thick = try a.alloc(f32, ranks);
     const span = try a.alloc(f32, ranks);
     @memset(thick, 0);
@@ -224,7 +223,8 @@ fn place(a: std.mem.Allocator, dir: mm.Dir, boxes: []Box, back: []const bool, ed
     for (span) |s| widest = @max(widest, s - across_gap);
     const lab = try a.alloc(f32, ranks);
     @memset(lab, 0);
-    for (edges, labels, back) |e, l, is_back| {
+    for (f.edges, labels, 0..) |e, l, ei| {
+        const is_back = ei < f.back.len and f.back[ei];
         if (is_back or e.to >= n or l[0] == 0) continue;
         const r = boxes[e.to].rank;
         lab[r] = @max(lab[r], if (vertical) l[1] else l[0]);
@@ -236,17 +236,10 @@ fn place(a: std.mem.Allocator, dir: mm.Dir, boxes: []Box, back: []const bool, ed
         starts[r] = along;
         along += thick[r];
     }
-    const idx = try a.alloc(usize, n);
-    for (idx, 0..) |*v, i| v.* = i;
-    std.mem.sort(usize, idx, boxes, struct {
-        fn lt(bs: []Box, x: usize, y: usize) bool {
-            return if (bs[x].rank != bs[y].rank) bs[x].rank < bs[y].rank else bs[x].order < bs[y].order;
-        }
-    }.lt);
     const cursor = try a.alloc(f32, ranks);
     for (0..ranks) |r| cursor[r] = (widest - (span[r] - across_gap)) / 2;
     const pad: f32 = 12;
-    for (idx) |i| {
+    for (f.sorted) |i| {
         const b = &boxes[i];
         const across = if (vertical) b.w else b.h;
         const pos = starts[b.rank] + ((thick[b.rank] - (if (vertical) b.h else b.w)) / 2);
@@ -263,78 +256,12 @@ fn place(a: std.mem.Allocator, dir: mm.Dir, boxes: []Box, back: []const bool, ed
         }
         cursor[b.rank] += across + across_gap;
     }
-    var backs: f32 = 0;
-    for (back) |is| if (is) {
-        backs += 1;
-    };
+    const backs: f32 = @floatFromInt(f.back_count);
     const lanes = if (backs > 0) backs * 10 + 10 else 0;
     return .{
         (if (vertical) widest else along) + 2 * pad + (if (vertical) lanes else 0),
         (if (vertical) along else widest) + 2 * pad + (if (vertical) 0 else lanes),
     };
-}
-
-fn rank(a: std.mem.Allocator, f: mm.Flow, boxes: []Box) ![]bool {
-    const n = f.nodes.len;
-    const back = try a.alloc(bool, f.edges.len);
-    @memset(back, false);
-    const state = try a.alloc(u8, n);
-    @memset(state, 0);
-    var stack: std.ArrayList(struct { v: usize, next: usize }) = .empty;
-    for (0..n) |root| {
-        if (state[root] != 0) continue;
-        try stack.append(a, .{ .v = root, .next = 0 });
-        state[root] = 1;
-        while (stack.items.len > 0) {
-            const top = &stack.items[stack.items.len - 1];
-            if (top.next >= f.edges.len) {
-                state[top.v] = 2;
-                _ = stack.pop();
-                continue;
-            }
-            const k = top.next;
-            top.next += 1;
-            const e = f.edges[k];
-            if (e.from != top.v or e.to >= n) continue;
-            if (state[e.to] == 1) {
-                back[k] = true;
-            } else if (state[e.to] == 0) {
-                state[e.to] = 1;
-                try stack.append(a, .{ .v = e.to, .next = 0 });
-            }
-        }
-    }
-    var changed = true;
-    var rounds: usize = 0;
-    while (changed and rounds <= n) : (rounds += 1) {
-        changed = false;
-        for (f.edges, back) |e, is_back| {
-            if (is_back or e.from >= n or e.to >= n) continue;
-            if (boxes[e.to].rank < boxes[e.from].rank + 1) {
-                boxes[e.to].rank = boxes[e.from].rank + 1;
-                changed = true;
-            }
-        }
-    }
-    return back;
-}
-
-fn order(a: std.mem.Allocator, f: mm.Flow, boxes: []Box, back: []const bool) !void {
-    for (boxes, 0..) |*b, i| b.order = @floatFromInt(i);
-    const sum = try a.alloc(f32, boxes.len);
-    const cnt = try a.alloc(f32, boxes.len);
-    for (0..2) |_| {
-        @memset(sum, 0);
-        @memset(cnt, 0);
-        for (f.edges, back) |e, is_back| {
-            if (is_back or e.from >= boxes.len or e.to >= boxes.len) continue;
-            sum[e.to] += boxes[e.from].order;
-            cnt[e.to] += 1;
-        }
-        for (boxes, 0..) |*b, i| if (cnt[i] > 0) {
-            b.order = sum[i] / cnt[i] + @as(f32, @floatFromInt(i)) * 0.001;
-        };
-    }
 }
 
 fn shape(c: *ui.Context, node: mm.Node, b: Box, pal: render.Palette, k: f32) void {
@@ -471,12 +398,13 @@ fn pie(c: *ui.Context, p: mm.Pie, pal: render.Palette) void {
     if (p.title.len > 0) {
         ui.text(c, p.title, .{ .size = 13.5, .weight = .semibold, .color = pal.ink });
     }
-    // Proportional stacked distribution bar
-    ui.row(c, .{ .width = .fill, .height = .{ .px = 18 }, .radius = 9, .clip = true, .gap = 2 });
+    // Proportional stacked distribution bar (no inner clip so retained scroll stays active)
+    ui.row(c, .{ .width = .fill, .height = .{ .px = 18 }, .gap = 3 });
     for (p.slices, 0..) |s, i| {
         ui.row(c, .{
             .grow = @max(s.value / total, 0.02),
             .height = .fill,
+            .radius = 6,
             .background = colors[i % colors.len],
         });
         ui.end(c);

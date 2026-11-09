@@ -162,7 +162,7 @@ fn renderBlock(
                 .gap = 8,
             });
             defer ui.end(c);
-            ui.text(c, md.stripInline(c.alloc(), h.text), .{
+            ui.text(c, h.text, .{
                 .size = sz,
                 .weight = .bold,
                 .color = pal.ink,
@@ -206,7 +206,6 @@ fn renderBlock(
                     .border_width = 1,
                     .background = pal.card,
                     .align_items = .center,
-                    .clip = true,
                 });
                 defer ui.end(c);
                 ui.row(c, .{ .padding = .{ .left = 6, .right = 5, .top = 2, .bottom = 2 } });
@@ -214,6 +213,7 @@ fn renderBlock(
                 ui.end(c);
                 if (bd.value.len > 0) {
                     ui.row(c, .{
+                        .radius = 5,
                         .background = bd.color,
                         .padding = .{ .left = 5, .right = 6, .top = 2, .bottom = 2 },
                     });
@@ -300,7 +300,7 @@ fn renderBlock(
                 .gap = 10,
             });
             defer ui.end(c);
-            ui.text(c, c.print("▾ {s}", .{md.stripInline(c.alloc(), det.summary)}), .{
+            ui.text(c, c.print("▾ {s}", .{det.summary}), .{
                 .size = 13.5,
                 .weight = .semibold,
                 .color = pal.ink,
@@ -328,12 +328,12 @@ fn renderCodeBlock(c: *ui.Context, lang: []const u8, code_text: []const u8, pal:
         .background = pal.code_bg,
         .border = pal.border,
         .border_width = 1,
-        .clip = true,
     });
     defer ui.end(c);
 
     ui.row(c, .{
         .width = .fill,
+        .radius = 10,
         .padding = .{ .left = 12, .right = 10, .top = 6, .bottom = 6 },
         .align_items = .center,
         .border = pal.border,
@@ -373,13 +373,13 @@ fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("merm
         .background = pal.card,
         .border = pal.border,
         .border_width = 1,
-        .clip = true,
     });
     defer ui.end(c);
 
     // Header bar
     ui.row(c, .{
         .width = .fill,
+        .radius = 12,
         .padding = .{ .left = 12, .right = 10, .top = 7, .bottom = 7 },
         .align_items = .center,
         .background = pal.code_bg,
@@ -434,10 +434,9 @@ fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: []
         .background = pal.card,
         .border = pal.border,
         .border_width = 1,
-        .clip = true,
     });
     defer ui.end(c);
-    ui.row(c, .{ .width = .{ .px = 4 }, .height = .fill, .background = accent });
+    ui.row(c, .{ .width = .{ .px = 4 }, .height = .fill, .radius = 4, .background = accent });
     ui.end(c);
     ui.column(c, .{ .grow = 1, .padding = .all(12), .gap = 4 });
     defer ui.end(c);
@@ -459,20 +458,20 @@ fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []cons
         .border = pal.border,
         .border_width = 1,
         .background = pal.card,
-        .clip = true,
     });
     defer ui.end(c);
 
     if (headers.len > 0) {
         ui.row(c, .{
             .width = .fill,
+            .radius = 10,
             .padding = .{ .left = 12, .right = 12, .top = 8, .bottom = 8 },
             .background = pal.code_bg,
             .gap = 12,
         });
         for (headers) |h| {
             ui.column(c, .{ .grow = 1, .width = .{ .px = 0 } });
-            ui.text(c, md.stripInline(c.alloc(), h), .{ .size = 12, .weight = .bold, .color = pal.ink, .wrap = true });
+            ui.text(c, h, .{ .size = 12, .weight = .bold, .color = pal.ink, .wrap = true });
             ui.end(c);
         }
         ui.end(c);

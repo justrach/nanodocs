@@ -25,6 +25,7 @@ pub const AppState = struct {
     explicit_file: ?[]const u8 = null,
     window: ?*nanoui.Window = null,
     mcp_listening: std.atomic.Value(bool) = .init(false),
+    mcp_dirty: std.atomic.Value(bool) = .init(false),
     mcp_calls: std.atomic.Value(u64) = .init(0),
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io, explicit_file: ?[]const u8) AppState {
@@ -52,15 +53,12 @@ pub const AppState = struct {
         }
         self.was_resizing = c.live_resizing;
 
-        // Auto-sync `.nanoui/shelf/` whenever an event/frame wakes the view
-        // (zero background polling when idle).
-        if (!c.live_resizing) {
-            const digest = self.shelf.computeShelfDigest();
-            if (digest != 0 and digest != self.shelf.shelf_digest) {
-                self.shelf.reload(self.explicit_file);
-                self.selected = 0;
-                c.changed = true;
-            }
+        // Zero-syscall frame path: only reload `.nanoui/shelf/` when an incoming
+        // MCP call marks `mcp_dirty` (or the user presses Cmd+R).
+        if (!c.live_resizing and self.mcp_dirty.swap(false, .acquire)) {
+            self.shelf.reload(self.explicit_file);
+            self.selected = 0;
+            c.changed = true;
         }
 
         // Keyboard shortcuts
@@ -490,6 +488,7 @@ pub const AppState = struct {
     pub fn notifyFromMcp(ctx: ?*anyopaque, _: []const u8) void {
         const self: *AppState = @ptrCast(@alignCast(ctx orelse return));
         _ = self.mcp_calls.fetchAdd(1, .monotonic);
+        self.mcp_dirty.store(true, .release);
         if (comptime builtin.os.tag == .macos) {
             nanoui.objc.dispatchMain(self, redrawOnMain);
         }

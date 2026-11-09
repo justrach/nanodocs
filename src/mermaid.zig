@@ -1,8 +1,11 @@
-//! Fast zero-copy Mermaid parser for `nanodocs`.
+//! Fast zero-copy Mermaid parser + pre-computed Sugiyama graph rank/order
+//! layout for `nanodocs`.
 //!
 //! Pre-parses `flowchart` / `graph` (`TD`, `LR`, `BT`, `RL`), `stateDiagram`,
-//! `classDiagram`, `erDiagram`, `sequenceDiagram`, and `pie` charts once when
-//! a document loads so rendering frames do zero string parsing.
+//! `classDiagram`, `erDiagram`, `sequenceDiagram`, and `pie` charts AND
+//! pre-computes cycle-breaking (`back`), longest-path `ranks`, barycenter
+//! `order`, and topological `sorted` indices once at load time so rendering
+//! frames do zero string parsing, zero DFS, and zero sorting.
 const std = @import("std");
 
 pub const Dir = enum { down, up, right, left };
@@ -27,6 +30,16 @@ pub const Flow = struct {
     dir: Dir = .down,
     nodes: []const Node,
     edges: []const Edge,
+    /// Pre-computed at parse time: whether each edge is a back-edge in a cycle.
+    back: []const bool = &.{},
+    /// Pre-computed at parse time: rank of each node.
+    ranks: []const usize = &.{},
+    /// Pre-computed at parse time: number of ranks (`max(rank) + 1`).
+    num_ranks: usize = 0,
+    /// Pre-computed at parse time: node indices sorted by `(rank, barycenter_order)`.
+    sorted: []const usize = &.{},
+    /// Pre-computed at parse time: count of back-edges.
+    back_count: usize = 0,
 };
 
 pub const Actor = struct { id: []const u8, label: []const u8, person: bool = false };
@@ -72,18 +85,18 @@ fn parseOr(arena: std.mem.Allocator, src: []const u8) !Diagram {
             var parts = std.mem.splitScalar(u8, l, ';');
             while (parts.next()) |stmt| try f.statement(std.mem.trim(u8, stmt, " \t"));
         }
-        return .{ .flow = .{ .kind_label = "FLOWCHART", .dir = f.dir, .nodes = f.nodes.items, .edges = f.edges.items } };
+        return .{ .flow = try f.finish("FLOWCHART") };
     }
     if (std.mem.startsWith(u8, kind, "stateDiagram")) {
         var f: FlowParser = .{ .arena = arena };
         for (lines.items[1..]) |l| try f.state(l);
-        return .{ .flow = .{ .kind_label = "STATE DIAGRAM", .dir = f.dir, .nodes = f.nodes.items, .edges = f.edges.items } };
+        return .{ .flow = try f.finish("STATE DIAGRAM") };
     }
     if (std.mem.startsWith(u8, kind, "classDiagram") or std.mem.startsWith(u8, kind, "erDiagram")) {
         var f: FlowParser = .{ .arena = arena };
         for (lines.items[1..]) |l| try f.classOrEr(l);
         const kl = if (std.mem.startsWith(u8, kind, "er")) "ER DIAGRAM" else "CLASS DIAGRAM";
-        return .{ .flow = .{ .kind_label = kl, .dir = f.dir, .nodes = f.nodes.items, .edges = f.edges.items } };
+        return .{ .flow = try f.finish(kl) };
     }
     if (std.mem.eql(u8, kind, "sequenceDiagram")) {
         var s: SeqParser = .{ .arena = arena };
@@ -152,6 +165,106 @@ const FlowParser = struct {
     dir: Dir = .down,
     nodes: std.ArrayList(Node) = .empty,
     edges: std.ArrayList(Edge) = .empty,
+
+    fn finish(f: *FlowParser, kind_label: []const u8) !Flow {
+        const a = f.arena;
+        const n = f.nodes.items.len;
+        const edges = f.edges.items;
+        const back = try a.alloc(bool, edges.len);
+        @memset(back, false);
+        const ranks = try a.alloc(usize, n);
+        @memset(ranks, 0);
+
+        // 1. Cycle breaking via iterative DFS
+        const visit = try a.alloc(u8, n);
+        @memset(visit, 0);
+        var stack: std.ArrayList(struct { v: usize, next: usize }) = .empty;
+        for (0..n) |root| {
+            if (visit[root] != 0) continue;
+            try stack.append(a, .{ .v = root, .next = 0 });
+            visit[root] = 1;
+            while (stack.items.len > 0) {
+                const top = &stack.items[stack.items.len - 1];
+                if (top.next >= edges.len) {
+                    visit[top.v] = 2;
+                    _ = stack.pop();
+                    continue;
+                }
+                const k = top.next;
+                top.next += 1;
+                const e = edges[k];
+                if (e.from != top.v or e.to >= n) continue;
+                if (visit[e.to] == 1) {
+                    back[k] = true;
+                } else if (visit[e.to] == 0) {
+                    visit[e.to] = 1;
+                    try stack.append(a, .{ .v = e.to, .next = 0 });
+                }
+            }
+        }
+
+        // 2. Longest-path rank assignment
+        var changed = true;
+        var rounds: usize = 0;
+        while (changed and rounds <= n) : (rounds += 1) {
+            changed = false;
+            for (edges, back) |e, is_back| {
+                if (is_back or e.from >= n or e.to >= n) continue;
+                if (ranks[e.to] < ranks[e.from] + 1) {
+                    ranks[e.to] = ranks[e.from] + 1;
+                    changed = true;
+                }
+            }
+        }
+        var num_ranks: usize = 0;
+        for (ranks) |r| num_ranks = @max(num_ranks, r + 1);
+
+        // 3. Barycenter ordering within ranks & pre-sorting node indices
+        const ord = try a.alloc(f32, n);
+        for (ord, 0..) |*o, i| o.* = @floatFromInt(i);
+        const sum = try a.alloc(f32, n);
+        const cnt = try a.alloc(f32, n);
+        for (0..2) |_| {
+            @memset(sum, 0);
+            @memset(cnt, 0);
+            for (edges, back) |e, is_back| {
+                if (is_back or e.from >= n or e.to >= n) continue;
+                sum[e.to] += ord[e.from];
+                cnt[e.to] += 1;
+            }
+            for (ord, 0..) |*o, i| if (cnt[i] > 0) {
+                o.* = sum[i] / cnt[i] + @as(f32, @floatFromInt(i)) * 0.001;
+            };
+        }
+
+        const sorted = try a.alloc(usize, n);
+        for (sorted, 0..) |*v, i| v.* = i;
+        const SortCtx = struct {
+            ranks: []const usize,
+            ord: []const f32,
+            fn lt(ctx: @This(), x: usize, y: usize) bool {
+                return if (ctx.ranks[x] != ctx.ranks[y]) ctx.ranks[x] < ctx.ranks[y] else ctx.ord[x] < ctx.ord[y];
+            }
+        };
+        std.mem.sort(usize, sorted, SortCtx{ .ranks = ranks, .ord = ord }, SortCtx.lt);
+
+        var back_count: usize = 0;
+        for (back) |is_b| if (is_b) {
+            back_count += 1;
+        };
+
+        return .{
+            .kind_label = kind_label,
+            .dir = f.dir,
+            .nodes = f.nodes.items,
+            .edges = edges,
+            .back = back,
+            .ranks = ranks,
+            .num_ranks = num_ranks,
+            .sorted = sorted,
+            .back_count = back_count,
+        };
+    }
 
     fn node(f: *FlowParser, id: []const u8, text: ?[]const u8, shape: ?Shape) !usize {
         for (f.nodes.items, 0..) |*n, i| if (std.mem.eql(u8, n.id, id)) {

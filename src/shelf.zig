@@ -265,24 +265,7 @@ pub const Shelf = struct {
     }
 
     pub fn writeAgentNote(self: *Shelf, title: []const u8, contents: []const u8, is_html: bool) ![]const u8 {
-        const a = self.arena.allocator();
-        var slug: std.ArrayList(u8) = .empty;
-        for (title) |ch| {
-            if (std.ascii.isAlphanumeric(ch)) {
-                try slug.append(a, std.ascii.toLower(ch));
-            } else if (slug.items.len > 0 and slug.items[slug.items.len - 1] != '-') {
-                try slug.append(a, '-');
-            }
-        }
-        const clean_slug = std.mem.trim(u8, slug.items, "-");
-        const base = if (clean_slug.len > 0) clean_slug else "agent-note";
-        const ext = if (is_html) "html" else "md";
-        const filename = try std.fmt.allocPrint(a, "{s}.{s}", .{ base, ext });
-        const body = if (!is_html and !std.mem.startsWith(u8, std.mem.trimStart(u8, contents, " \t\r\n"), "#"))
-            try std.fmt.allocPrint(a, "# {s}\n\n{s}\n", .{ title, contents })
-        else
-            contents;
-        return self.saveArtifact(filename, body);
+        return writeAgentNoteFast(self.io, self.arena.allocator(), self.root_dir, self.env.shelf_dir, title, contents, is_html);
     }
 
     fn addFile(self: *Shelf, a: std.mem.Allocator, path: []const u8, in_shelf: bool) void {
@@ -330,4 +313,50 @@ pub fn parseEnvBytes(bytes: []const u8, source_name: []const u8) EnvConfig {
         }
     }
     return cfg;
+}
+
+/// Fast single-file write path for MCP `show_document` and `render_mermaid`
+/// that writes directly to `.nanoui/shelf/<slug>.md` without reading or
+/// parsing workspace documents (`README.md`, `AGENTS.md`, etc.).
+pub fn writeAgentNoteFast(
+    io: std.Io,
+    a: std.mem.Allocator,
+    root_dir_hint: ?[]const u8,
+    shelf_dir: []const u8,
+    title: []const u8,
+    contents: []const u8,
+    is_html: bool,
+) ![]const u8 {
+    const cwd = std.Io.Dir.cwd();
+    const root_dir = root_dir_hint orelse if (cwd.statFile(io, "src/nanoui.zig", .{})) |_|
+        "."
+    else |_| if (cwd.statFile(io, "../../src/nanoui.zig", .{})) |_|
+        "../.."
+    else |_|
+        ".";
+
+    const shelf_path = if (std.mem.eql(u8, root_dir, "."))
+        shelf_dir
+    else
+        try std.fmt.allocPrint(a, "{s}/{s}", .{ root_dir, shelf_dir });
+    try cwd.createDirPath(io, shelf_path);
+
+    var slug: std.ArrayList(u8) = .empty;
+    for (title) |ch| {
+        if (std.ascii.isAlphanumeric(ch)) {
+            try slug.append(a, std.ascii.toLower(ch));
+        } else if (slug.items.len > 0 and slug.items[slug.items.len - 1] != '-') {
+            try slug.append(a, '-');
+        }
+    }
+    const clean_slug = std.mem.trim(u8, slug.items, "-");
+    const base = if (clean_slug.len > 0) clean_slug else "agent-note";
+    const ext = if (is_html) "html" else "md";
+    const dest = try std.fmt.allocPrint(a, "{s}/{s}.{s}", .{ shelf_path, base, ext });
+    const body = if (!is_html and !std.mem.startsWith(u8, std.mem.trimStart(u8, contents, " \t\r\n"), "#"))
+        try std.fmt.allocPrint(a, "# {s}\n\n{s}\n", .{ title, contents })
+    else
+        contents;
+    try cwd.writeFile(io, .{ .sub_path = dest, .data = body });
+    return dest;
 }

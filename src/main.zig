@@ -97,6 +97,10 @@ pub fn main(init: std.process.Init) !void {
             _ = std.Io.File.stdout().writeStreamingAll(init.io, agent_help_text) catch {};
             return;
         }
+        if (std.mem.eql(u8, arg, "--bench")) {
+            try runBench(init);
+            return;
+        }
         if (std.mem.eql(u8, arg, "mcp") or std.mem.eql(u8, arg, "--mcp")) {
             is_mcp_cmd = true;
             continue;
@@ -289,4 +293,80 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try app.run();
+}
+
+fn runBench(init: std.process.Init) !void {
+    const mm = @import("mermaid.zig");
+    const ui = nanoui.ui;
+    const sample_mermaid =
+        \\flowchart LR
+        \\  Agent([Coding Agent]) -->|nanodocs show| Shelf[(.nanoui/shelf)]
+        \\  Shelf -->|Pre-parse AST| Check{Diagram Kind?}
+        \\  Check -->|Flow / State| Sugiyama[Ranked Sugiyama Layout]
+        \\  Check -->|Sequence| Lifelines[Participant Lifelines]
+        \\  Check -->|Pie| Stacked[Proportional Bar]
+        \\  Sugiyama --> GPU[[120Hz Metal GPU Frame]]
+        \\  Lifelines --> GPU
+        \\  Stacked --> GPU
+    ;
+
+    // 1. Benchmark Mermaid AST + Sugiyama rank/order pre-parse (1,000 iterations)
+    var bench_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer bench_arena.deinit();
+    const t0 = ui.clock.now();
+    for (0..1000) |_| {
+        _ = bench_arena.reset(.retain_capacity);
+        const d = mm.parse(bench_arena.allocator(), sample_mermaid);
+        std.mem.doNotOptimizeAway(&d);
+    }
+    const parse_us = (ui.clock.now() - t0) * 1e6 / 1000.0;
+
+    // 2. Benchmark Full Frame vs Retained Scroll Frame (200 iterations)
+    var state = AppState.init(init.gpa, init.io, null);
+    defer state.deinit();
+    const v = ui.View.init(&state, AppState.view);
+    var tester: ui.Tester = undefined;
+    try tester.init(init.gpa, v, .{ .width = 1120, .height = 760 });
+    defer tester.deinit();
+
+    const t1 = ui.clock.now();
+    for (0..100) |_| {
+        tester.ctx.changed = true;
+        tester.frame();
+    }
+    const full_frame_us = (ui.clock.now() - t1) * 1e6 / 100.0;
+
+    // Trigger retained scroll frames in the main document scroll area (x=600, y=400)
+    tester.frame();
+    const t2 = ui.clock.now();
+    var retained_hits: usize = 0;
+    for (0..100) |i| {
+        const dy: f32 = if (i % 2 == 0) -6.0 else 6.0;
+        tester.scroll(600, 400, dy);
+        if (tester.ctx.stats.retained) retained_hits += 1;
+    }
+    const retained_scroll_us = (ui.clock.now() - t2) * 1e6 / 100.0;
+
+    // 3. Benchmark MCP `render_mermaid` JSON-RPC roundtrip (100 iterations)
+    var srv: mcp.Server = .{ .gpa = init.gpa, .io = init.io };
+    const t3 = ui.clock.now();
+    for (0..100) |_| {
+        var arena = std.heap.ArenaAllocator.init(init.gpa);
+        defer arena.deinit();
+        var out: std.Io.Writer.Allocating = .init(arena.allocator());
+        try srv.handle(arena.allocator(), &out.writer, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"render_mermaid\",\"arguments\":{\"title\":\"Bench\",\"diagram\":\"flowchart LR\\n  A --> B\"}}}");
+    }
+    const mcp_us = (ui.clock.now() - t3) * 1e6 / 100.0;
+    std.Io.Dir.cwd().deleteFile(init.io, ".nanoui/shelf/bench.md") catch {};
+    std.Io.Dir.cwd().deleteFile(init.io, "../../.nanoui/shelf/bench.md") catch {};
+
+    const report = try std.fmt.allocPrint(
+        init.gpa,
+        \\{{"mermaid_preparse_us":{d:.2},"full_frame_us":{d:.1},"retained_scroll_frame_us":{d:.2},"retained_scroll_hit_rate":"{d}/100","mcp_render_mermaid_us":{d:.1}}}
+        \\
+    ,
+        .{ parse_us, full_frame_us, retained_scroll_us, retained_hits, mcp_us },
+    );
+    defer init.gpa.free(report);
+    _ = std.Io.File.stdout().writeStreamingAll(init.io, report) catch {};
 }

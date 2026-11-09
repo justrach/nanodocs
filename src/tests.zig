@@ -147,6 +147,11 @@ test "nanodocs UI renders Mermaid diagrams offscreen in Tester and switches mode
     try testing.expect(t.containsText("MERMAID"));
     try testing.expect(t.containsText("Paper"));
 
+    // Scrolling the document uses nanoui's retained scroll skirt (0 layout passes)
+    t.scroll(600, 400, -16);
+    try testing.expect(t.ctx.stats.retained);
+    try testing.expectEqual(@as(usize, 0), t.ctx.stats.passes);
+
     try t.clickText("Paper");
     try testing.expectEqual(@import("render.zig").CanvasMode.dark, state.mode);
 

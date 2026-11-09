@@ -136,10 +136,7 @@ pub const Server = struct {
             const is_html = html_src != null and markdown_src == null;
             const raw = if (is_html) html_src.? else markdown_src.?;
 
-            var sh = shelf_mod.Shelf.init(self.gpa, self.io);
-            defer sh.deinit();
-            sh.reload(null);
-            const saved_path = sh.writeAgentNote(title, raw, is_html) catch |err| {
+            const saved_path = shelf_mod.writeAgentNoteFast(self.io, a, null, ".nanoui/shelf", title, raw, is_html) catch |err| {
                 const msg = try std.fmt.allocPrint(a, "Failed to save document: {s}", .{@errorName(err)});
                 return writeToolResult(a, out, id, is_modern, msg, true);
             };
@@ -173,10 +170,7 @@ pub const Server = struct {
             else
                 try std.fmt.allocPrint(a, "# {s}\n\n```mermaid\n{s}\n```\n", .{ title, diagram_src });
 
-            var sh = shelf_mod.Shelf.init(self.gpa, self.io);
-            defer sh.deinit();
-            sh.reload(null);
-            const saved_path = sh.writeAgentNote(title, full_md, false) catch |err| {
+            const saved_path = shelf_mod.writeAgentNoteFast(self.io, a, null, ".nanoui/shelf", title, full_md, false) catch |err| {
                 const msg = try std.fmt.allocPrint(a, "Failed to write diagram: {s}", .{@errorName(err)});
                 return writeToolResult(a, out, id, is_modern, msg, true);
             };

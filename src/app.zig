@@ -27,6 +27,8 @@ pub const AppState = struct {
     mcp_listening: std.atomic.Value(bool) = .init(false),
     mcp_dirty: std.atomic.Value(bool) = .init(false),
     mcp_calls: std.atomic.Value(u64) = .init(0),
+    last_mcp_name_buf: [128]u8 = undefined,
+    last_mcp_name_len: usize = 0,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io, explicit_file: ?[]const u8) AppState {
         var s: AppState = .{
@@ -57,7 +59,17 @@ pub const AppState = struct {
         // MCP call marks `mcp_dirty` (or the user presses Cmd+R).
         if (!c.live_resizing and self.mcp_dirty.swap(false, .acquire)) {
             self.shelf.reload(self.explicit_file);
+            const target = self.last_mcp_name_buf[0..self.last_mcp_name_len];
             self.selected = 0;
+            if (target.len > 0) {
+                for (self.shelf.entries.items, 0..) |ent, i| {
+                    if (std.mem.eql(u8, ent.name, target)) {
+                        self.selected = i;
+                        break;
+                    }
+                }
+                self.status_toast = "⚡ Live from Agent MCP";
+            }
             c.changed = true;
         }
 
@@ -269,6 +281,15 @@ pub const AppState = struct {
                 ui.text(c, active.name, .{ .size = 12.5, .weight = .semibold, .color = pal.ink });
                 ui.text(c, "·", .{ .size = 12, .color = pal.muted });
                 ui.text(c, c.print("{d} words", .{active.doc.word_count}), .{ .size = 11.5, .color = pal.muted });
+            }
+            if (self.status_toast.len > 0) {
+                ui.row(c, .{
+                    .padding = .{ .left = 7, .right = 7, .top = 2, .bottom = 2 },
+                    .radius = 999,
+                    .background = pal.accent,
+                });
+                ui.text(c, self.status_toast, .{ .size = 10.5, .weight = .bold, .color = .hex(0xffffff) });
+                ui.end(c);
             }
             if (c.live_resizing) {
                 ui.row(c, .{
@@ -485,8 +506,12 @@ pub const AppState = struct {
         }
     }
 
-    pub fn notifyFromMcp(ctx: ?*anyopaque, _: []const u8) void {
+    pub fn notifyFromMcp(ctx: ?*anyopaque, saved_path: []const u8) void {
         const self: *AppState = @ptrCast(@alignCast(ctx orelse return));
+        const base = std.fs.path.basename(saved_path);
+        const n = @min(base.len, self.last_mcp_name_buf.len);
+        @memcpy(self.last_mcp_name_buf[0..n], base[0..n]);
+        self.last_mcp_name_len = n;
         _ = self.mcp_calls.fetchAdd(1, .monotonic);
         self.mcp_dirty.store(true, .release);
         if (comptime builtin.os.tag == .macos) {

@@ -1,6 +1,13 @@
-# nanodocs
+<p align="center">
+  <img src="docs/icon.png" alt="nanodocs icon" width="128" height="128" />
+</p>
 
-**Native 120 Hz GPU Markdown, HTML & Mermaid Studio + Bidirectional Agent & Harness Bridge**, built in Zig 0.17 on [`nanoui`](https://github.com/justrach/nanoui).
+<h1 align="center">nanodocs</h1>
+
+<p align="center">
+  <strong>Native 120 Hz GPU Markdown, HTML &amp; Mermaid Studio + Bidirectional Agent &amp; Harness Bridge</strong><br/>
+  Built in Zig 0.17 on <a href="https://github.com/justrach/nanoui"><code>nanoui</code></a> · Zero Webviews · Streamable HTTP MCP (<code>:7740/mcp</code>) · Local Harness IPC (<code>:27664</code>)
+</p>
 
 Zero webviews, zero Electron, zero per-frame parsing: documents and Mermaid diagrams are pre-parsed into typed ASTs in **4.95 µs** and drawn directly with Metal and CoreText on macOS (or `nanoui`'s TrueType shaper and OpenGL / D3D11 / CPU renderer on Linux and Windows).
 

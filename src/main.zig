@@ -364,7 +364,11 @@ pub fn main(init: std.process.Init) !void {
         init.gpa.free(explicit_file.?);
     };
 
-    const app = try nanoui.App.create(init, .{ .name = "nanodocs" });
+    const app_icon = @embedFile("icon.png");
+    const app = try nanoui.App.create(init, .{
+        .name = "nanodocs",
+        .about = .{ .name = "nanodocs", .version = "0.2.0", .icon_png = app_icon },
+    });
     defer app.destroy();
 
     var state = AppState.init(init.gpa, init.io, explicit_file);
@@ -390,6 +394,7 @@ pub fn main(init: std.process.Init) !void {
         .min_width = 680,
         .min_height = 460,
         .title_bar = .hidden,
+        .icon = app_icon,
         .content = .{ .view = .init(&state, AppState.view) },
     });
 

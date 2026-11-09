@@ -5,6 +5,8 @@ const ui = nanoui.ui;
 const md = @import("markdown.zig");
 const mm = @import("mermaid.zig");
 const shelf = @import("shelf.zig");
+const mcp = @import("mcp.zig");
+const mcp_http = @import("mcp_http.zig");
 const AppState = @import("app.zig").AppState;
 
 test "markdown parser: headings, alerts, code, tables, task lists and mermaid" {
@@ -150,4 +152,47 @@ test "nanodocs UI renders Mermaid diagrams offscreen in Tester and switches mode
 
     try t.clickText("Discord · .env");
     try testing.expect(state.show_env_panel);
+
+    try t.clickText("MCP · :7740");
+    try testing.expect(state.show_mcp_panel);
+}
+
+test "MCP server: legacy initialize, stateless 2026-07-28 discover, tools/list and render_mermaid" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var srv: mcp.Server = .{ .gpa = testing.allocator, .io = testing.io };
+    var out: std.Io.Writer.Allocating = .init(a);
+
+    // 1. Legacy initialize handshake
+    try srv.handle(a, &out.writer, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\"}}");
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"protocolVersion\":\"2025-11-25\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"name\":\"nanodocs\"") != null);
+
+    // 2. Stateless 2026-07-28 server/discover
+    var out2: std.Io.Writer.Allocating = .init(a);
+    try srv.handle(a, &out2.writer, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"server/discover\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}");
+    try testing.expect(std.mem.indexOf(u8, out2.written(), "\"resultType\":\"complete\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out2.written(), "\"cacheScope\":\"public\"") != null);
+
+    // 3. tools/list
+    var out3: std.Io.Writer.Allocating = .init(a);
+    try srv.handle(a, &out3.writer, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}");
+    try testing.expect(std.mem.indexOf(u8, out3.written(), "\"render_mermaid\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out3.written(), "\"show_document\"") != null);
+
+    // 4. tools/call render_mermaid
+    var out4: std.Io.Writer.Allocating = .init(a);
+    try srv.handle(a, &out4.writer, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"render_mermaid\",\"arguments\":{\"title\":\"MCP Test Flow\",\"diagram\":\"flowchart LR\\n  MCP --> GPU\"}}}");
+    defer {
+        std.Io.Dir.cwd().deleteFile(testing.io, ".nanoui/shelf/mcp-test-flow.md") catch {};
+        std.Io.Dir.cwd().deleteFile(testing.io, "../../.nanoui/shelf/mcp-test-flow.md") catch {};
+    }
+    try testing.expect(std.mem.indexOf(u8, out4.written(), "Rendered FLOWCHART (2 nodes, 1 edges)") != null);
+    try testing.expect(std.mem.indexOf(u8, out4.written(), "\"isError\":false") != null);
+
+    // 5. Constant-time bearer check
+    try testing.expect(mcp_http.equalToken("Bearer secret123", "Bearer secret123"));
+    try testing.expect(!mcp_http.equalToken("Bearer secret123", "Bearer wrong1234"));
 }

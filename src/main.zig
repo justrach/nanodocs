@@ -1,20 +1,36 @@
 //! `nanodocs`: native GPU Markdown (`.md`), HTML (`.html`), and Mermaid
-//! studio + agent artifact shelf built on `nanoui`.
+//! studio + agent artifact shelf + MCP server (Streamable HTTP & stdio).
+//!
+//! MCP Server (after Codegraff's `graff mcp serve --http`):
+//!   nanodocs mcp --http [--port 7740] [--token <secret>]
+//!   nanodocs mcp
+//!   nanodocs mcp config
 //!
 //! Agent CLI:
 //!   nanodocs show --title "Architecture" --markdown "```mermaid\nflowchart LR\n A-->B\n```"
-//!   nanodocs show --title "Report" path/to/file.md [--no-open]
 //!   nanodocs --agent-help
 //!   nanodocs --json
 const std = @import("std");
 const nanoui = @import("nanoui");
 const AppState = @import("app.zig").AppState;
 const shelf_mod = @import("shelf.zig");
+const mcp = @import("mcp.zig");
+const mcp_http = @import("mcp_http.zig");
 
 const agent_help_text =
-    \\nanodocs — Agent-First Visual Markdown, HTML & Native GPU Mermaid Studio
+    \\nanodocs — Agent-First Visual Markdown, HTML & Native GPU Mermaid Studio + MCP
     \\
-    \\COMMANDS FOR AGENTS:
+    \\MCP SERVER (Streamable HTTP & stdio, 2026-07-28 stateless + 2025-11-25 session):
+    \\  nanodocs mcp --http [--port 7740] [--token <token>]
+    \\      Starts the loopback Streamable HTTP MCP listener at http://127.0.0.1:7740/mcp
+    \\      (also runs automatically in the background whenever the nanodocs GUI window is open).
+    \\  nanodocs mcp
+    \\      Runs the MCP server over stdio (newline-delimited JSON-RPC).
+    \\  nanodocs mcp config
+    \\      Prints mcpServers JSON for HTTP and stdio clients (Claude Code, Cursor, Codex, Graff).
+    \\  MCP Tools: `show_document`, `render_mermaid`, `list_shelf`, `read_document`
+    \\
+    \\CLI COMMANDS FOR AGENTS:
     \\  nanodocs show --title "<Title>" --markdown "<Markdown + Mermaid>" [--no-open]
     \\      Saves an explanation or diagram to .nanoui/shelf/<slug>.md and shows it to the user.
     \\  nanodocs show --title "<Title>" --html "<HTML>" [--no-open]
@@ -22,7 +38,7 @@ const agent_help_text =
     \\  nanodocs <file.md|file.html> [--shelf] [--dark]
     \\      Opens a file directly (and optionally pins a copy into .nanoui/shelf/).
     \\  nanodocs --json
-    \\      Prints JSON metadata of all documents in .nanoui/shelf/ and .env status.
+    \\      Prints JSON metadata of all documents in .nanoui/shelf/, MCP URL, and .env status.
     \\
     \\SUPPORTED NATIVE GPU MERMAID DIAGRAMS (0ms per-frame parse):
     \\  - flowchart TD / LR / BT / RL (rectangles, rounds, stadiums, diamonds, hexagons, cylinders, subroutines)
@@ -33,12 +49,38 @@ const agent_help_text =
     \\
 ;
 
+const BgListenerCtx = struct {
+    state: *AppState,
+    port: u16,
+    token: []const u8,
+
+    fn run(self: *BgListenerCtx) void {
+        self.state.mcp_listening.store(true, .release);
+        const proto: mcp.Server = .{
+            .gpa = self.state.gpa,
+            .io = self.state.io,
+            .on_show = AppState.notifyFromMcp,
+            .on_show_ctx = self.state,
+        };
+        mcp_http.runHttp(self.state.io, self.state.gpa, self.port, self.token, proto) catch {
+            self.state.mcp_listening.store(false, .release);
+        };
+    }
+};
+
 pub fn main(init: std.process.Init) !void {
     var explicit_file: ?[]const u8 = null;
     var save_to_shelf: bool = false;
     var dark_start: bool = false;
     var is_show_cmd: bool = false;
+    var is_mcp_cmd: bool = false;
+    var is_mcp_config: bool = false;
+    var mcp_use_http: bool = false;
+    var no_mcp_bg: bool = false;
+    var has_snapshot_flag: bool = false;
     var no_open: bool = false;
+    var mcp_port_override: ?u16 = null;
+    var mcp_token_override: ?[]const u8 = null;
     var title_arg: []const u8 = "Agent Walkthrough";
     var inline_md: ?[]const u8 = null;
     var inline_html: ?[]const u8 = null;
@@ -47,10 +89,38 @@ pub fn main(init: std.process.Init) !void {
     defer args.deinit();
     _ = args.next();
     while (args.next()) |arg| {
-        if (std.mem.startsWith(u8, arg, "--nanoui-")) continue;
+        if (std.mem.startsWith(u8, arg, "--nanoui-")) {
+            if (std.mem.startsWith(u8, arg, "--nanoui-snapshot")) has_snapshot_flag = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--agent-help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             _ = std.Io.File.stdout().writeStreamingAll(init.io, agent_help_text) catch {};
             return;
+        }
+        if (std.mem.eql(u8, arg, "mcp") or std.mem.eql(u8, arg, "--mcp")) {
+            is_mcp_cmd = true;
+            continue;
+        }
+        if (is_mcp_cmd and std.mem.eql(u8, arg, "serve")) continue;
+        if (is_mcp_cmd and std.mem.eql(u8, arg, "config")) {
+            is_mcp_config = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--http")) {
+            mcp_use_http = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-mcp")) {
+            no_mcp_bg = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--port")) {
+            if (args.next()) |p| mcp_port_override = std.fmt.parseInt(u16, p, 10) catch 7740;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--token")) {
+            if (args.next()) |t| mcp_token_override = t;
+            continue;
         }
         if (std.mem.eql(u8, arg, "--json")) {
             var sh = shelf_mod.Shelf.init(init.gpa, init.io);
@@ -58,11 +128,13 @@ pub fn main(init: std.process.Init) !void {
             sh.reload(null);
             var out: std.ArrayList(u8) = .empty;
             defer out.deinit(init.gpa);
-            try out.appendSlice(init.gpa, "{\"shelf_dir\":\"");
-            try out.appendSlice(init.gpa, sh.env.shelf_dir);
-            try out.appendSlice(init.gpa, "\",\"discord_guild_id\":\"");
-            try out.appendSlice(init.gpa, sh.env.guild_id);
-            try out.appendSlice(init.gpa, "\",\"documents\":[");
+            const hdr = try std.fmt.allocPrint(
+                init.gpa,
+                "{{\"shelf_dir\":\"{s}\",\"mcp_http_url\":\"http://127.0.0.1:{d}/mcp\",\"discord_guild_id\":\"{s}\",\"documents\":[",
+                .{ sh.env.shelf_dir, sh.env.mcp_port, sh.env.guild_id },
+            );
+            defer init.gpa.free(hdr);
+            try out.appendSlice(init.gpa, hdr);
             for (sh.entries.items, 0..) |e, i| {
                 if (i > 0) try out.append(init.gpa, ',');
                 const line = try std.fmt.allocPrint(init.gpa, "{{\"name\":\"{s}\",\"path\":\"{s}\",\"in_shelf\":{},\"words\":{d}}}", .{ e.name, e.path, e.in_shelf, e.doc.word_count });
@@ -102,6 +174,50 @@ pub fn main(init: std.process.Init) !void {
             continue;
         }
         explicit_file = arg;
+    }
+
+    if (is_mcp_cmd) {
+        var sh = shelf_mod.Shelf.init(init.gpa, init.io);
+        defer sh.deinit();
+        sh.reload(null);
+        const port = mcp_port_override orelse sh.env.mcp_port;
+        const token = mcp_token_override orelse sh.env.mcp_token;
+        if (is_mcp_config) {
+            var exe_buf: [1024]u8 = undefined;
+            const exe = std.process.executablePath(init.io, &exe_buf) catch 0;
+            const exe_str = if (exe > 0) exe_buf[0..exe] else "nanodocs";
+            const cfg = try std.fmt.allocPrint(
+                init.gpa,
+                \\{{
+                \\  "mcpServers": {{
+                \\    "nanodocs": {{
+                \\      "type": "http",
+                \\      "url": "http://127.0.0.1:{d}/mcp"
+                \\    }},
+                \\    "nanodocs-stdio": {{
+                \\      "command": "{s}",
+                \\      "args": ["mcp"]
+                \\    }}
+                \\  }}
+                \\}}
+                \\
+            ,
+                .{ port, exe_str },
+            );
+            defer init.gpa.free(cfg);
+            _ = std.Io.File.stdout().writeStreamingAll(init.io, cfg) catch {};
+            return;
+        }
+        const proto: mcp.Server = .{ .gpa = init.gpa, .io = init.io };
+        if (mcp_use_http) {
+            const msg = try std.fmt.allocPrint(init.gpa, "nanodocs MCP listening at http://127.0.0.1:{d}/mcp\n", .{port});
+            defer init.gpa.free(msg);
+            _ = std.Io.File.stderr().writeStreamingAll(init.io, msg) catch {};
+            try mcp_http.runHttp(init.io, init.gpa, port, token, proto);
+        } else {
+            try mcp_http.runStdio(init, proto);
+        }
+        return;
     }
 
     if (is_show_cmd or inline_md != null or inline_html != null) {
@@ -151,8 +267,8 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    _ = try app.newWindow(.{
-        .title = "nanodocs — Markdown, Mermaid & Agent Shelf",
+    state.window = try app.newWindow(.{
+        .title = "nanodocs — Markdown, Mermaid & Agent MCP Studio",
         .width = 1120,
         .height = 760,
         .min_width = 680,
@@ -160,6 +276,17 @@ pub fn main(init: std.process.Init) !void {
         .title_bar = .hidden,
         .content = .{ .view = .init(&state, AppState.view) },
     });
+
+    var bg_ctx: BgListenerCtx = .{
+        .state = &state,
+        .port = mcp_port_override orelse state.shelf.env.mcp_port,
+        .token = mcp_token_override orelse state.shelf.env.mcp_token,
+    };
+    if (!no_mcp_bg and !has_snapshot_flag) {
+        if (std.Thread.spawn(.{}, BgListenerCtx.run, .{&bg_ctx})) |th| {
+            th.detach();
+        } else |_| {}
+    }
 
     try app.run();
 }

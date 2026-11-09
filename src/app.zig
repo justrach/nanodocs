@@ -2,6 +2,7 @@
 //! Glass top capsules, `.env` Discord server inspector, and `c.live_resizing`
 //! transaction-synced resize handling.
 const std = @import("std");
+const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const md = @import("markdown.zig");
@@ -18,9 +19,13 @@ pub const AppState = struct {
     show_sidebar: bool = true,
     show_raw: bool = false,
     show_env_panel: bool = false,
+    show_mcp_panel: bool = false,
     was_resizing: bool = false,
     status_toast: []const u8 = "",
     explicit_file: ?[]const u8 = null,
+    window: ?*nanoui.Window = null,
+    mcp_listening: std.atomic.Value(bool) = .init(false),
+    mcp_calls: std.atomic.Value(u64) = .init(0),
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io, explicit_file: ?[]const u8) AppState {
         var s: AppState = .{
@@ -69,6 +74,7 @@ pub const AppState = struct {
         if (c.shortcut(.{ .key = 'b', .cmd = true })) self.show_sidebar = !self.show_sidebar;
         if (c.shortcut(.{ .key = 'e', .cmd = true })) self.show_raw = !self.show_raw;
         if (c.shortcut(.{ .key = 'd', .cmd = true })) self.show_env_panel = !self.show_env_panel;
+        if (c.shortcut(.{ .key = 'm', .cmd = true })) self.show_mcp_panel = !self.show_mcp_panel;
         if (c.shortcut(.{ .key = 'r', .cmd = true }) and !c.live_resizing) {
             self.shelf.reload(self.explicit_file);
         }
@@ -100,6 +106,9 @@ pub const AppState = struct {
 
         self.renderTopGlassBar(c, pal);
 
+        if (self.show_mcp_panel) {
+            self.renderMcpPanel(c, pal);
+        }
         if (self.show_env_panel) {
             self.renderEnvPanel(c, pal);
         }
@@ -330,6 +339,29 @@ pub const AppState = struct {
                 c.changed = true;
             }
 
+            ui.key(c, "btn-mcp");
+            const mcp_btn = ui.pressable(c, .{
+                .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 },
+                .radius = 999,
+                .background = if (self.show_mcp_panel) pal.code_bg else .transparent,
+            }, pal.code_bg);
+            const is_mcp_up = self.mcp_listening.load(.monotonic);
+            ui.row(c, .{ .align_items = .center, .gap = 5 });
+            ui.row(c, .{
+                .width = .{ .px = 7 },
+                .height = .{ .px = 7 },
+                .radius = 999,
+                .background = if (is_mcp_up) .hex(0x22c55e) else pal.accent,
+            });
+            ui.end(c);
+            ui.text(c, c.print("MCP · :{d}", .{self.shelf.env.mcp_port}), .{ .size = 11.5, .weight = .medium, .color = pal.ink });
+            ui.end(c);
+            ui.end(c);
+            if (mcp_btn.clicked) {
+                self.show_mcp_panel = !self.show_mcp_panel;
+                c.changed = true;
+            }
+
             ui.key(c, "btn-env");
             const env_btn = ui.pressable(c, .{
                 .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 },
@@ -405,5 +437,66 @@ pub const AppState = struct {
                 c.clipboard.write(c.clipboard.ctx, gh_wh);
             }
         }
+    }
+
+    fn renderMcpPanel(self: *AppState, c: *ui.Context, pal: render.Palette) void {
+        ui.row(c, .{
+            .width = .fill,
+            .padding = .{ .left = 20, .right = 20, .top = 10, .bottom = 10 },
+            .background = pal.card,
+            .border = pal.border,
+            .border_width = 1,
+            .align_items = .center,
+            .gap = 12,
+        });
+        defer ui.end(c);
+
+        const port = self.shelf.env.mcp_port;
+        const calls = self.mcp_calls.load(.monotonic);
+        ui.text(c, c.print("Streamable HTTP MCP: http://127.0.0.1:{d}/mcp ({d} calls)", .{ port, calls }), .{
+            .size = 12,
+            .mono = true,
+            .color = pal.ink,
+        });
+        ui.spacer(c);
+
+        ui.key(c, "copy-mcp-http");
+        const cp_http = ui.pressable(c, .{
+            .padding = .{ .left = 10, .right = 10, .top = 4, .bottom = 4 },
+            .radius = 6,
+            .background = pal.accent,
+        }, pal.accent);
+        ui.text(c, "Copy HTTP MCP JSON", .{ .size = 11.5, .weight = .semibold, .color = .hex(0xffffff) });
+        ui.end(c);
+        if (cp_http.clicked) {
+            const json = c.print("{{\"mcpServers\":{{\"nanodocs\":{{\"type\":\"http\",\"url\":\"http://127.0.0.1:{d}/mcp\"}}}}}}", .{port});
+            c.clipboard.write(c.clipboard.ctx, json);
+        }
+
+        ui.key(c, "copy-mcp-claude");
+        const cp_claude = ui.pressable(c, .{
+            .padding = .{ .left = 10, .right = 10, .top = 4, .bottom = 4 },
+            .radius = 6,
+            .background = pal.code_bg,
+        }, pal.border);
+        ui.text(c, "Copy claude mcp add", .{ .size = 11.5, .weight = .semibold, .color = pal.ink });
+        ui.end(c);
+        if (cp_claude.clicked) {
+            const cmd = c.print("claude mcp add --transport http nanodocs http://127.0.0.1:{d}/mcp", .{port});
+            c.clipboard.write(c.clipboard.ctx, cmd);
+        }
+    }
+
+    pub fn notifyFromMcp(ctx: ?*anyopaque, _: []const u8) void {
+        const self: *AppState = @ptrCast(@alignCast(ctx orelse return));
+        _ = self.mcp_calls.fetchAdd(1, .monotonic);
+        if (comptime builtin.os.tag == .macos) {
+            nanoui.objc.dispatchMain(self, redrawOnMain);
+        }
+    }
+
+    fn redrawOnMain(ctx: ?*anyopaque) callconv(.c) void {
+        const self: *AppState = @ptrCast(@alignCast(ctx orelse return));
+        if (self.window) |w| w.redraw();
     }
 };

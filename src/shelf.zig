@@ -12,6 +12,9 @@ pub const EnvConfig = struct {
     invite_url: []const u8 = "https://discord.gg/EmTpv7rmTA",
     webhook_url: []const u8 = "",
     shelf_dir: []const u8 = ".nanoui/shelf",
+    mcp_port: u16 = 7740,
+    mcp_url: []const u8 = "http://127.0.0.1:7740/mcp",
+    mcp_token: []const u8 = "",
     loaded_from: []const u8 = "",
 };
 
@@ -318,6 +321,12 @@ pub fn parseEnvBytes(bytes: []const u8, source_name: []const u8) EnvConfig {
             cfg.webhook_url = val;
         } else if (std.mem.eql(u8, key, "NANOUI_SHELF_DIR")) {
             cfg.shelf_dir = val;
+        } else if (std.mem.eql(u8, key, "NANODOCS_MCP_PORT")) {
+            cfg.mcp_port = std.fmt.parseInt(u16, val, 10) catch 7740;
+        } else if (std.mem.eql(u8, key, "NANODOCS_MCP_URL")) {
+            cfg.mcp_url = val;
+        } else if (std.mem.eql(u8, key, "NANODOCS_MCP_TOKEN")) {
+            cfg.mcp_token = val;
         }
     }
     return cfg;

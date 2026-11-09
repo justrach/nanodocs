@@ -5,6 +5,7 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const md = @import("markdown.zig");
 const shelf_mod = @import("shelf.zig");
+const render_mermaid = @import("render_mermaid.zig");
 
 pub const CanvasMode = enum { paper, light, dark };
 
@@ -222,6 +223,7 @@ fn renderBlock(
             }
         },
         .code => |code| renderCodeBlock(c, code.lang, code.text, pal, idx),
+        .mermaid => |m| renderMermaidBlock(c, m.source, m.diagram, pal, idx),
         .callout => |ca| renderCallout(c, ca.kind, ca.title, ca.text, pal),
         .list_item => |li| {
             ui.row(c, .{
@@ -362,6 +364,59 @@ fn renderCodeBlock(c: *ui.Context, lang: []const u8, code_text: []const u8, pal:
         .color = pal.ink,
         .wrap = true,
     });
+}
+
+fn renderMermaidBlock(c: *ui.Context, source: []const u8, diagram: @import("mermaid.zig").Diagram, pal: Palette, idx: usize) void {
+    ui.column(c, .{
+        .width = .fill,
+        .radius = 12,
+        .background = pal.card,
+        .border = pal.border,
+        .border_width = 1,
+        .clip = true,
+    });
+    defer ui.end(c);
+
+    // Header bar
+    ui.row(c, .{
+        .width = .fill,
+        .padding = .{ .left = 12, .right = 10, .top = 7, .bottom = 7 },
+        .align_items = .center,
+        .background = pal.code_bg,
+        .border = pal.border,
+        .border_width = 1,
+        .gap = 8,
+    });
+    ui.row(c, .{
+        .padding = .{ .left = 6, .right = 6, .top = 2, .bottom = 2 },
+        .radius = 4,
+        .background = pal.accent,
+    });
+    ui.text(c, "MERMAID", .{ .size = 9.5, .weight = .bold, .color = .hex(0xffffff) });
+    ui.end(c);
+    ui.text(c, render_mermaid.kindLabel(diagram), .{ .size = 11, .weight = .semibold, .color = pal.muted, .mono = true });
+    ui.spacer(c);
+    ui.text(c, "Native GPU · 0ms parse/frame", .{ .size = 10.5, .color = pal.muted });
+    const copy_id = c.print("copy-mermaid-{d}", .{idx});
+    ui.key(c, copy_id);
+    const cp = ui.pressable(c, .{
+        .padding = .{ .left = 8, .right = 8, .top = 2, .bottom = 2 },
+        .radius = 5,
+        .background = pal.card,
+    }, pal.border);
+    ui.text(c, "Copy", .{ .size = 11, .weight = .medium, .color = pal.muted });
+    ui.end(c);
+    if (cp.clicked) {
+        c.clipboard.write(c.clipboard.ctx, source);
+    }
+    ui.end(c);
+
+    // Diagram canvas
+    ui.column(c, .{ .width = .fill, .padding = .{ .top = 16, .bottom = 16, .left = 16, .right = 16 } });
+    defer ui.end(c);
+    if (!render_mermaid.draw(c, diagram, 660, pal)) {
+        ui.text(c, source, .{ .size = 12, .mono = true, .color = pal.ink, .wrap = true });
+    }
 }
 
 fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: []const u8, pal: Palette) void {

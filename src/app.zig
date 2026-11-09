@@ -47,6 +47,17 @@ pub const AppState = struct {
         }
         self.was_resizing = c.live_resizing;
 
+        // Auto-sync `.nanoui/shelf/` whenever an event/frame wakes the view
+        // (zero background polling when idle).
+        if (!c.live_resizing) {
+            const digest = self.shelf.computeShelfDigest();
+            if (digest != 0 and digest != self.shelf.shelf_digest) {
+                self.shelf.reload(self.explicit_file);
+                self.selected = 0;
+                c.changed = true;
+            }
+        }
+
         // Keyboard shortcuts
         if (c.shortcut(.{ .key = 't', .cmd = true })) {
             self.mode = switch (self.mode) {
@@ -313,7 +324,7 @@ pub const AppState = struct {
             ui.end(c);
             if (pin_btn.clicked and self.shelf.entries.items.len > 0) {
                 const active = self.shelf.entries.items[@min(self.selected, self.shelf.entries.items.len - 1)];
-                self.shelf.saveArtifact(active.name, active.raw) catch {};
+                _ = self.shelf.saveArtifact(active.name, active.raw) catch {};
                 self.shelf.reload(self.explicit_file);
                 self.status_toast = "Saved to .nanoui/shelf/";
                 c.changed = true;

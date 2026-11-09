@@ -3,10 +3,11 @@ const testing = std.testing;
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const md = @import("markdown.zig");
+const mm = @import("mermaid.zig");
 const shelf = @import("shelf.zig");
 const AppState = @import("app.zig").AppState;
 
-test "markdown parser: headings, alerts, code, tables and task lists" {
+test "markdown parser: headings, alerts, code, tables, task lists and mermaid" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const doc = md.parse(
@@ -25,6 +26,11 @@ test "markdown parser: headings, alerts, code, tables and task lists" {
         \\| --- | --- |
         \\| Rebuild | 0.56 s |
         \\
+        \\```mermaid
+        \\flowchart LR
+        \\  A([Agent]) -->|show| B[[nanodocs GPU]]
+        \\```
+        \\
         \\```zig
         \\const x: u32 = 42;
         \\```
@@ -33,10 +39,58 @@ test "markdown parser: headings, alerts, code, tables and task lists" {
     );
     try testing.expectEqualStrings("nanodocs Studio", doc.title);
     try testing.expectEqual(@as(usize, 1), doc.outline.len);
-    try testing.expect(doc.blocks.len >= 6);
+    try testing.expect(doc.blocks.len >= 7);
+    var found_mermaid = false;
+    for (doc.blocks) |b| {
+        if (b == .mermaid) {
+            found_mermaid = true;
+            try testing.expect(b.mermaid.diagram == .flow);
+            try testing.expectEqual(@as(usize, 2), b.mermaid.diagram.flow.nodes.len);
+            try testing.expectEqual(@as(usize, 1), b.mermaid.diagram.flow.edges.len);
+        }
+    }
+    try testing.expect(found_mermaid);
 }
 
-test "html parser: converts standalone HTML into native blocks" {
+test "mermaid parser: flowcharts, sequence diagrams, state diagrams and pie charts" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const seq = mm.parse(
+        a,
+        \\sequenceDiagram
+        \\  participant A as Agent
+        \\  participant U as User
+        \\  A->>U: Visual Walkthrough
+        \\  Note over A,U: Rendered at 120Hz
+    );
+    try testing.expect(seq == .seq);
+    try testing.expectEqual(@as(usize, 2), seq.seq.actors.len);
+    try testing.expectEqual(@as(usize, 2), seq.seq.steps.len);
+
+    const st = mm.parse(
+        a,
+        \\stateDiagram-v2
+        \\  [*] --> Active
+        \\  Active --> [*]
+    );
+    try testing.expect(st == .flow);
+    try testing.expectEqualStrings("STATE DIAGRAM", st.flow.kind_label);
+    try testing.expectEqual(@as(usize, 3), st.flow.nodes.len);
+
+    const pie = mm.parse(
+        a,
+        \\pie title Rebuild Breakdown
+        \\  "App" : 52
+        \\  "Runtime" : 48
+    );
+    try testing.expect(pie == .pie);
+    try testing.expectEqualStrings("Rebuild Breakdown", pie.pie.title);
+    try testing.expectEqual(@as(usize, 2), pie.pie.slices.len);
+}
+
+test "html parser: converts standalone HTML and <pre class=mermaid> into native blocks" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const doc = md.parse(
@@ -46,6 +100,10 @@ test "html parser: converts standalone HTML into native blocks" {
         \\<body>
         \\<h1>Agent Verification Report</h1>
         \\<p>All <strong>47 PRs</strong> audited and merged.</p>
+        \\<pre class="mermaid">
+        \\flowchart TD
+        \\  Start --> Finish
+        \\</pre>
         \\<ul><li>Zero C shims</li><li>Under 600 lines</li></ul>
         \\</body></html>
     ,
@@ -53,7 +111,11 @@ test "html parser: converts standalone HTML into native blocks" {
     );
     try testing.expect(doc.is_html);
     try testing.expectEqualStrings("Agent Verification Report", doc.title);
-    try testing.expect(doc.blocks.len >= 3);
+    var has_mermaid = false;
+    for (doc.blocks) |b| if (b == .mermaid) {
+        has_mermaid = true;
+    };
+    try testing.expect(has_mermaid);
 }
 
 test "env parser: reads Discord guild, invite and webhook from .env" {
@@ -70,7 +132,7 @@ test "env parser: reads Discord guild, invite and webhook from .env" {
     try testing.expectEqualStrings("https://discord.com/api/webhooks/123/abc", cfg.webhook_url);
 }
 
-test "nanodocs UI renders offscreen in Tester and switches modes" {
+test "nanodocs UI renders Mermaid diagrams offscreen in Tester and switches modes" {
     var state = AppState.init(testing.allocator, testing.io, null);
     defer state.deinit();
 
@@ -80,6 +142,7 @@ test "nanodocs UI renders offscreen in Tester and switches modes" {
     defer t.deinit();
 
     try testing.expect(t.containsText("nanodocs"));
+    try testing.expect(t.containsText("MERMAID"));
     try testing.expect(t.containsText("Paper"));
 
     try t.clickText("Paper");

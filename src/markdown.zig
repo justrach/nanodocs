@@ -6,6 +6,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const mm = @import("mermaid.zig");
 
 pub const AlertKind = enum { blockquote, note, tip, important, warning, caution };
 
@@ -30,6 +31,7 @@ pub const Block = union(enum) {
     heading: struct { level: u8, text: []const u8, centered: bool = false },
     paragraph: struct { text: []const u8, centered: bool = false, muted: bool = false },
     code: struct { lang: []const u8, text: []const u8 },
+    mermaid: struct { source: []const u8, diagram: mm.Diagram },
     callout: struct { kind: AlertKind, title: []const u8, text: []const u8 },
     list_item: struct { depth: u8, ordered: u16, checked: ?bool, text: []const u8 },
     image: struct { src: []const u8, alt: []const u8, width: f32, centered: bool },
@@ -104,7 +106,11 @@ fn parseBlocks(a: std.mem.Allocator, src: []const u8) []const Block {
                 if (body.items.len > 0) body.append(a, '\n') catch {};
                 body.appendSlice(a, std.mem.trimEnd(u8, cl, "\r")) catch {};
             }
-            out.append(a, .{ .code = .{ .lang = lang, .text = body.items } }) catch {};
+            if (std.ascii.eqlIgnoreCase(lang, "mermaid")) {
+                out.append(a, .{ .mermaid = .{ .source = body.items, .diagram = mm.parse(a, body.items) } }) catch {};
+            } else {
+                out.append(a, .{ .code = .{ .lang = lang, .text = body.items } }) catch {};
+            }
             continue;
         }
 
@@ -528,8 +534,14 @@ fn htmlToMarkdown(a: std.mem.Allocator, html: []const u8) []const u8 {
             continue;
         }
         if (std.mem.startsWith(u8, html[i..], "<pre")) {
-            out.appendSlice(a, "\n```\n") catch {};
-            i = (std.mem.indexOfScalarPos(u8, html, i, '>') orelse i) + 1;
+            const close_bracket = std.mem.indexOfScalarPos(u8, html, i, '>') orelse i;
+            const open_tag = html[i .. close_bracket + 1];
+            if (std.mem.indexOf(u8, open_tag, "mermaid") != null) {
+                out.appendSlice(a, "\n```mermaid\n") catch {};
+            } else {
+                out.appendSlice(a, "\n```\n") catch {};
+            }
+            i = close_bracket + 1;
             continue;
         }
         if (std.mem.startsWith(u8, html[i..], "</pre>")) {

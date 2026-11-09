@@ -49,18 +49,29 @@ pub const Shelf = struct {
         self.arena.deinit();
     }
 
+    fn detectRootDir(self: *const Shelf, a: std.mem.Allocator) []const u8 {
+        const cwd = std.Io.Dir.cwd();
+        if (cwd.statFile(self.io, "src/nanoui.zig", .{})) |_| return "." else |_| {}
+        if (cwd.statFile(self.io, "../../src/nanoui.zig", .{})) |_| return "../.." else |_| {}
+        if (cwd.statFile(self.io, "README.md", .{})) |_| return "." else |_| {}
+        if (std.c.getenv("HOME")) |h_ptr| {
+            const home = std.mem.span(h_ptr);
+            if (std.fmt.allocPrint(a, "{s}/nanoui", .{home})) |nanoui_dir| {
+                const readme = std.fmt.allocPrint(a, "{s}/README.md", .{nanoui_dir}) catch "";
+                if (cwd.statFile(self.io, readme, .{})) |_| return nanoui_dir else |_| {}
+            } else |_| {}
+            return a.dupe(u8, home) catch ".";
+        }
+        return ".";
+    }
+
     pub fn reload(self: *Shelf, explicit_file: ?[]const u8) void {
         self.entries.clearRetainingCapacity();
         _ = self.arena.reset(.retain_capacity);
         const a = self.arena.allocator();
-
         const cwd = std.Io.Dir.cwd();
-        self.root_dir = if (cwd.statFile(self.io, "src/nanoui.zig", .{})) |_|
-            "."
-        else |_| if (cwd.statFile(self.io, "../../src/nanoui.zig", .{})) |_|
-            "../.."
-        else |_|
-            ".";
+
+        self.root_dir = self.detectRootDir(a);
 
         self.loadEnv(a);
         self.ensureShelfSeeded(a);

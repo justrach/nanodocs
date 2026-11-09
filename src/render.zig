@@ -456,6 +456,17 @@ fn renderCallout(c: *ui.Context, kind: md.AlertKind, title: []const u8, body: []
     }, .{ .code_background = pal.code_bg, .code_color = pal.ink });
 }
 
+fn colGrow(col_idx: usize, num_cols: usize) f32 {
+    if (num_cols == 3) {
+        return switch (col_idx) {
+            0 => 1.0,
+            1 => 1.35,
+            else => 2.15,
+        };
+    }
+    return 1.0;
+}
+
 fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []const md.Cell, pal: Palette) void {
     ui.column(c, .{
         .width = .fill,
@@ -474,8 +485,8 @@ fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []cons
             .background = pal.code_bg,
             .gap = 12,
         });
-        for (headers) |h| {
-            ui.column(c, .{ .grow = 1, .width = .{ .px = 0 } });
+        for (headers, 0..) |h, ci| {
+            ui.column(c, .{ .width = .fill, .grow = colGrow(ci, headers.len) });
             ui.text(c, h, .{ .size = 12, .weight = .bold, .color = pal.ink, .wrap = true });
             ui.end(c);
         }
@@ -491,8 +502,8 @@ fn renderTable(c: *ui.Context, headers: []const []const u8, rows: []const []cons
             .border_width = 1,
             .gap = 12,
         });
-        for (r) |cell| {
-            ui.column(c, .{ .grow = 1, .width = .{ .px = 0 } });
+        for (r, 0..) |cell, ci| {
+            ui.column(c, .{ .width = .fill, .grow = colGrow(ci, r.len) });
             ui.markdown.view(c, cell.text, .{ .size = 12.5, .color = pal.ink, .wrap = true }, .{ .code_background = pal.code_bg });
             ui.end(c);
         }

@@ -353,8 +353,15 @@ fn extractTag(s: []const u8, comptime tag: []const u8) ?[]const u8 {
 pub fn cleanHtmlInline(a: std.mem.Allocator, s: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
+    var in_code = false;
     while (i < s.len) {
-        if (s[i] == '<') {
+        if (s[i] == '`') {
+            in_code = !in_code;
+            out.append(a, '`') catch {};
+            i += 1;
+            continue;
+        }
+        if (!in_code and s[i] == '<') {
             const end = std.mem.indexOfScalarPos(u8, s, i, '>') orelse break;
             const tag = s[i + 1 .. end];
             if (std.mem.eql(u8, tag, "strong") or std.mem.eql(u8, tag, "/strong") or std.mem.eql(u8, tag, "b") or std.mem.eql(u8, tag, "/b")) {
